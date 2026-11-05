@@ -1,331 +1,2067 @@
+diff --git a/app/src/main/java/me/spica27/spicamusic/di/AppModule.kt b/app/src/main/java/me/spica27/spicamusic/di/AppModule.kt
+index b08df8f..65302a3 100644
+--- a/app/src/main/java/me/spica27/spicamusic/di/AppModule.kt
++++ b/app/src/main/java/me/spica27/spicamusic/di/AppModule.kt
+@@ -33,6 +33,7 @@ import me.spica27.spicamusic.ui.library.LibraryPageViewModel
+ import me.spica27.spicamusic.ui.listeningstats.ListeningStatsViewModel
+ import me.spica27.spicamusic.ui.mostedplayed.MostPlayedViewModel
+ import me.spica27.spicamusic.ui.player.CurrentPlaylistPanelViewModel
++import me.spica27.spicamusic.ui.player.LyricsStyleViewModel
+ import me.spica27.spicamusic.ui.player.LyricsViewModel
+ import me.spica27.spicamusic.ui.player.PlayerViewModel
+ import me.spica27.spicamusic.ui.playlist.PlaylistViewModel
+@@ -115,6 +116,13 @@ object AppModule {
+                 )
+             }
+ 
++            // 歌词样式 ViewModel（字体、字号、模糊、跳动等）
++            viewModel {
++                LyricsStyleViewModel(
++                    settings = get<SettingsUseCases>(),
++                )
++            }
++
+             // 当前播放列表面板 ViewModel
+             viewModel {
+                 CurrentPlaylistPanelViewModel(
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/AppScaffold.kt b/app/src/main/java/me/spica27/spicamusic/ui/AppScaffold.kt
+index 6ac295b..d663475 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/AppScaffold.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/AppScaffold.kt
+@@ -20,6 +20,7 @@ import com.skydoves.landscapist.core.Landscapist
+ import com.skydoves.landscapist.image.LocalLandscapist
+ import dev.chrisbanes.haze.rememberHazeState
+ import me.spica27.spicamusic.common.entity.ThemeColorStyle
++import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
+ import me.spica27.spicamusic.core.preferences.PreferencesManager
+ import me.spica27.spicamusic.ui.adaptive.LocalPaneInfo
+ import me.spica27.spicamusic.ui.adaptive.LocalShellInsets
+@@ -39,6 +40,7 @@ import me.spica27.spicamusic.ui.navigation.rememberAppNavigator
+ import me.spica27.spicamusic.ui.player.LocalPlayerViewModel
+ import me.spica27.spicamusic.ui.player.PlayerViewModel
+ import me.spica27.spicamusic.ui.theme.SPICaMusicTheme
++import me.spica27.spicamusic.ui.widget.LyricsFontOption
+ import me.spica27.spicamusic.utils.Nav3Transitions
+ import org.koin.compose.koinInject
+ import org.koin.compose.viewmodel.koinActivityViewModel
+@@ -62,6 +64,7 @@ fun AppScaffold() {
+             .getString(PreferencesManager.Keys.THEME_COLOR_STYLE, ThemeColorStyle.Textured.value)
+             .collectAsStateWithLifecycle(ThemeColorStyle.Textured.value)
+ 
++    val lyricsStyle by preferencesManager.lyricsStyle.collectAsStateWithLifecycle(LyricsStyleSettings())
+     val playerViewModel: PlayerViewModel = koinActivityViewModel()
+     val color by playerViewModel.playerThemeColor.collectAsStateWithLifecycle()
+     val keepScreenOn by
+@@ -97,6 +100,7 @@ fun AppScaffold() {
+         darkTheme = isDarkMode,
+         themeColor = color,
+         themeColorStyle = ThemeColorStyle.fromString(themeColorStyleValue),
++        fontFamily = LyricsFontOption.fromId(lyricsStyle.fontStyle).family,
+     ) {
+         CompositionLocalProvider(
+             LocalLiquidGlassConfig provides LiquidGlassConfig(enabled = liquidGlassEnabled),
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsPanel.kt b/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsPanel.kt
+index cf84db6..6f8da58 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsPanel.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsPanel.kt
+@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableLongStateOf
++import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+ import androidx.compose.runtime.rememberUpdatedState
+ import androidx.compose.runtime.setValue
+@@ -32,6 +33,7 @@ import me.spica27.spicamusic.ui.navigation.LyricsSourceRoute
+ import me.spica27.spicamusic.ui.widget.FloatingLyricsToolbar
+ import me.spica27.spicamusic.ui.widget.LyricsDisplayMode
+ import me.spica27.spicamusic.ui.widget.LyricsDisplayOptions
++import me.spica27.spicamusic.ui.widget.LyricsSettingsSheet
+ import me.spica27.spicamusic.ui.widget.LyricsUI
+ import org.koin.compose.viewmodel.koinActivityViewModel
+ 
+@@ -60,6 +62,9 @@ fun LyricsPanel(
+     // 此处切换歌词源 / 调整偏移量会同步反映到 mini 歌词
+     val viewModel: LyricsViewModel = koinActivityViewModel()
+     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
++    val styleViewModel: LyricsStyleViewModel = koinActivityViewModel()
++    val styleSettings by styleViewModel.style.collectAsStateWithLifecycle()
++    var showLyricsSettings by remember { mutableStateOf(false) }
+ 
+     val backStack = LocalBackStack.current
+ 
+@@ -124,6 +129,7 @@ fun LyricsPanel(
+                     currentTimeProvider = currentTimeProvider,
+                     displayMode = displayMode,
+                     displayOptions = displayOptions,
++                    styleSettings = styleSettings,
+                     isSynced = displayed.isSynced,
+                     onSeekToTime = { posMs ->
+                         viewModel.seekTo(posMs - uiState.lyricsOffsetMs)
+@@ -143,6 +149,7 @@ fun LyricsPanel(
+         // 浮动工具栏（右下角）：切换入口常驻，保证无内嵌/在线时仍可进入选择本地文件
+         FloatingLyricsToolbar(
+             offsetEnabled = !uiState.lyricsSuppressed,
++            onOpenLyricsSettings = { showLyricsSettings = true },
+             offsetMs = uiState.lyricsOffsetMs,
+             onOffsetChange = { viewModel.updateOffset(it) },
+             onOpenLyricsSwitcher = {
+@@ -159,5 +166,13 @@ fun LyricsPanel(
+                                 toolbarBottomInset,
+                     ),
+         )
++
++        if (showLyricsSettings) {
++            LyricsSettingsSheet(
++                settings = styleSettings,
++                onUpdate = styleViewModel::update,
++                onDismiss = { showLyricsSettings = false },
++            )
++        }
+     }
+ }
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsStyleViewModel.kt b/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsStyleViewModel.kt
+new file mode 100644
+index 0000000..4a4633e
+--- /dev/null
++++ b/app/src/main/java/me/spica27/spicamusic/ui/player/LyricsStyleViewModel.kt
+@@ -0,0 +1,34 @@
++package me.spica27.spicamusic.ui.player
++
++import androidx.compose.runtime.Stable
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import kotlinx.coroutines.flow.SharingStarted
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.stateIn
++import kotlinx.coroutines.launch
++import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
++import me.spica27.spicamusic.feature.settings.domain.SettingsUseCases
++
++/**
++ * Holds the lyrics window options (font, size, blur, jiggle ...).
++ * Shared by the lyrics window and its settings sheet through the Activity scope.
++ */
++@Stable
++class LyricsStyleViewModel(
++    private val settings: SettingsUseCases,
++) : ViewModel() {
++    val style: StateFlow<LyricsStyleSettings> =
++        settings.lyricsStyle
++            .stateIn(viewModelScope, SharingStarted.Eagerly, LyricsStyleSettings())
++
++    /** Change one or more options: `update { it.copy(lyricsSize = 110) }`. */
++    fun update(transform: (LyricsStyleSettings) -> LyricsStyleSettings) {
++        viewModelScope.launch { settings.updateLyricsStyle(transform) }
++    }
++
++    /** Back to the defaults of the reference lyrics window. */
++    fun reset() {
++        viewModelScope.launch { settings.resetLyricsStyle() }
++    }
++}
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/theme/Theme.kt b/app/src/main/java/me/spica27/spicamusic/ui/theme/Theme.kt
+index b251cb6..958235e 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/theme/Theme.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/theme/Theme.kt
+@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material3.LocalRippleConfiguration
+ import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Typography
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontFamily
+ import androidx.compose.ui.unit.dp
+ import com.materialkolor.PaletteStyle
+ import com.materialkolor.dynamiccolor.ColorSpec
+@@ -22,6 +24,7 @@ import com.materialkolor.ktx.animateColorScheme
+ import com.materialkolor.rememberDynamicColorScheme
+ import me.spica27.spicamusic.common.entity.ThemeColorStyle
+ import me.spica27.spicamusic.ui.widget.rememberClickHighlightIndication
++import me.spica27.spicamusic.ui.widget.withFontFamily
+ 
+ object Shapes {
+     val ExtraLarge2CornerBasedShape = RoundedCornerShape(32.dp)
+@@ -68,6 +71,8 @@ fun SPICaMusicTheme(
+     darkTheme: Boolean = isSystemInDarkTheme(),
+     themeColor: Color,
+     themeColorStyle: ThemeColorStyle = ThemeColorStyle.Textured,
++    /** Font for the whole player (Lyrics settings > Font style). Null keeps the app font. */
++    fontFamily: FontFamily? = null,
+     content: @Composable () -> Unit,
+ ) {
+     val colorScheme =
+@@ -103,7 +108,9 @@ fun SPICaMusicTheme(
+             }
+         }
+ 
+-    MaterialTheme(colorScheme = colorScheme) {
++    val typography = remember(fontFamily) { Typography().withFontFamily(fontFamily) }
++
++    MaterialTheme(colorScheme = colorScheme, typography = typography) {
+         Box(
+             modifier =
+                 Modifier.background(
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/FloatingLyricsToolbar.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/FloatingLyricsToolbar.kt
+index 32c8a3c..5dd4b2a 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/widget/FloatingLyricsToolbar.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/FloatingLyricsToolbar.kt
+@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.Add
+ import androidx.compose.material.icons.rounded.Close
+ import androidx.compose.material.icons.rounded.Remove
+ import androidx.compose.material.icons.rounded.SwapHoriz
++import androidx.compose.material.icons.rounded.TextFields
+ import androidx.compose.material.icons.rounded.Tune
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.MaterialTheme
+@@ -52,6 +53,7 @@ fun FloatingLyricsToolbar(
+     onOpenLyricsSwitcher: () -> Unit,
+     modifier: Modifier = Modifier,
+     offsetEnabled: Boolean = true,
++    onOpenLyricsSettings: () -> Unit = {},
+ ) {
+     var isExpanded by remember { mutableStateOf(false) }
+ 
+@@ -88,6 +90,14 @@ fun FloatingLyricsToolbar(
+                     )
+                 }
+ 
++                // 歌词设置（字体、字号、模糊、跳动等）
++                LyricsSettingsButton(
++                    onClick = {
++                        isExpanded = false
++                        onOpenLyricsSettings()
++                    },
++                )
++
+                 // 切换歌词来源按钮（常驻：无内嵌/在线时用户仍可进入选择本地文件）
+                 SwitchLyricsButton(
+                     onClick = {
+@@ -167,6 +177,33 @@ private fun OffsetAdjustBar(
+     }
+ }
+ 
++/**
++ * 歌词设置按钮
++ */
++@Composable
++private fun LyricsSettingsButton(
++    onClick: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    LyricsPill(
++        modifier = modifier,
++        onClick = onClick,
++        shape = Shapes.ExtraLargeCornerBasedShape,
++    ) {
++        Icon(
++            imageVector = Icons.Rounded.TextFields,
++            contentDescription = null,
++            tint = MaterialTheme.colorScheme.onSurface,
++            modifier = Modifier.size(18.dp),
++        )
++        Text(
++            text = stringResource(R.string.lyr_set_title),
++            style = LyricsControlDefaults.pillLabelTextStyle,
++            color = MaterialTheme.colorScheme.onSurface,
++        )
++    }
++}
++
+ /**
+  * 切换歌词按钮
+  */
 diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
-index 0dc760f..189a81b 100644
+index 144179a..0dc760f 100644
 --- a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
 +++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
-@@ -222,40 +222,19 @@ private object LyricUIConstants {
+@@ -80,12 +80,14 @@ import androidx.compose.ui.layout.LayoutCoordinates
+ import androidx.compose.ui.layout.LookaheadScope
+ import androidx.compose.ui.layout.layout
+ import androidx.compose.ui.layout.onPlaced
++import androidx.compose.ui.platform.LocalConfiguration
+ import androidx.compose.ui.platform.LocalDensity
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.text.TextLayoutResult
+ import androidx.compose.ui.text.TextMeasurer
+ import androidx.compose.ui.text.TextStyle
+ import androidx.compose.ui.text.drawText
++import androidx.compose.ui.text.font.FontFamily
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.rememberTextMeasurer
+ import androidx.compose.ui.text.style.TextAlign
+@@ -105,6 +107,8 @@ import me.spica27.spicamusic.R
+ import me.spica27.spicamusic.common.entity.LyricItem
+ import me.spica27.spicamusic.common.entity.getSentenceContent
+ import me.spica27.spicamusic.common.entity.voiceAgents
++import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
++import me.spica27.spicamusic.core.preferences.TransliterationPosition
+ import me.spica27.spicamusic.ui.theme.Shapes
+ import java.util.Locale
+ import kotlin.math.abs
+@@ -119,13 +123,15 @@ private object LyricUIConstants {
  
- // ==================== 行切换时序 ====================
+     const val SEEK_PREVIEW_END_PADDING = 16
  
--/** 行透明度曲线。 */
--private val LyricLineAlphaEasing = CubicBezierEasing(0.39f, 0.575f, 0.565f, 1f)
--
--private val ActiveScaleSpec =
--    tween<Float>(
--        durationMillis = LyricUIConstants.ACTIVE_SCALE_DURATION_MS,
--        delayMillis = LyricUIConstants.ACTIVE_SCALE_DELAY_MS,
--        easing = LyricLineMoveEasing,
--    )
--private val InactiveScaleSpec =
--    tween<Float>(
--        durationMillis = LyricUIConstants.INACTIVE_SCALE_DURATION_MS,
--        delayMillis = LyricUIConstants.INACTIVE_SCALE_DELAY_MS,
--        easing = LyricLineMoveEasing,
--    )
--private val ActiveAlphaSpec =
--    tween<Float>(
--        durationMillis = LyricUIConstants.ACTIVE_ALPHA_DURATION_MS,
--        delayMillis = LyricUIConstants.ACTIVE_ALPHA_DELAY_MS,
--        easing = LyricLineAlphaEasing,
--    )
--private val InactiveAlphaSpec =
--    tween<Float>(
--        durationMillis = LyricUIConstants.INACTIVE_ALPHA_DURATION_MS,
--        delayMillis = LyricUIConstants.INACTIVE_ALPHA_DELAY_MS,
--        easing = LyricLineAlphaEasing,
--    )
-+/** CSS `ease`, used by the reference window for opacity and blur. */
-+private val LyricLineAlphaEasing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+-    const val INACTIVE_SCALE = 1f
++    /** Lines other than the current one sit at 95.5% scale, the current line at 100%. */
++    const val INACTIVE_SCALE = 0.955f
++    const val ACTIVE_SCALE = 1f
  
--/** 计算当前行下方指定距离的位移延迟。 */
--private fun lineStaggerDelayMillis(distanceBelow: Int): Int {
--    val n = distanceBelow.coerceIn(0, LyricUIConstants.LINE_STAGGER_MAX_DISTANCE)
--    if (n == 0) return 0
--    return (LyricUIConstants.LINE_STAGGER_UNIT_MS * 0.25f * (5f * n - n * (n + 1) / 2f)).roundToInt()
--}
-+/** The reference window's `--ease`, used for the scale of a line. */
-+private val LyricLineScaleEasing = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
+     // 行切换动效参数
+ 
+     /** 位移时长随相邻行间隔在线性范围内变化。 */
+-    const val LINE_MOVE_MIN_DURATION_MS = 480
+-    const val LINE_MOVE_MAX_DURATION_MS = 750
++    /** Short gaps between lines shorten the move to this fraction of the Move to current line setting. */
++    const val LINE_MOVE_SHORT_GAP_FRACTION = 0.8f
+     const val LINE_GAP_MIN_MS = 200L
+     const val LINE_GAP_MAX_MS = 750L
+ 
+@@ -143,19 +149,33 @@ private object LyricUIConstants {
+     const val INACTIVE_ALPHA_DELAY_MS = 250
+     const val INACTIVE_ALPHA_DURATION_MS = 350
+ 
+-    const val EMPHASIS_FACTOR = 0.18f
+-    const val MIN_EMPHASIS = 0.35f
++    /** Opacity of a non-current line when Unsung text opacity is at its default (50%). */
++    const val INACTIVE_LINE_ALPHA = 0.42f
++    const val UNSUNG_DEFAULT_PERCENT = 50f
 +
-+// Becoming the current line: opacity changes at once (its unsung words already sit at the dim of the upcoming
-+// lines, so nothing dips), scale and blur ease in over 0.5 s / 0.45 s. Leaving it: opacity, blur 0.45 s, scale 0.5 s.
-+private val ActiveScaleSpec = tween<Float>(durationMillis = 500, easing = LyricLineScaleEasing)
-+private val InactiveScaleSpec = tween<Float>(durationMillis = 500, easing = LyricLineScaleEasing)
-+private val ActiveAlphaSpec = tween<Float>(durationMillis = 0)
-+private val InactiveAlphaSpec = tween<Float>(durationMillis = 450, easing = LyricLineAlphaEasing)
-+private val LineBlurSpec = tween<Float>(durationMillis = 450, easing = LyricLineAlphaEasing)
++    /** Blur grows with the distance from the current line: 2.5 dp next to it, +1.2 dp per line, 6 dp at most. */
++    const val BLUR_FIRST_LINE_DP = 2.5f
++    const val BLUR_STEP_DP = 1.2f
+     const val MAX_BLUR_RADIUS = 6f
  
- /** Delay of a jiggling line `distanceBelow` lines under the current one: grows per line, easing off for far lines. */
- private fun jiggleDelayMillis(
-@@ -317,7 +296,8 @@ private class LineTimeline private constructor(
-                         transitionDuration(line.time - previousEnd, moveMs)
+-    const val SEEK_OVERLAY_HIDE_DELAY = 450L
++    /** Text sizes of the reference window (sp, before the size sliders). */
++    const val LYRICS_MIN_SP = 27f
++    const val LYRICS_MAX_SP = 36f
++    const val LYRICS_WIDTH_FRACTION = 0.08f
++    const val SECONDARY_SP = 17f
++    const val BG_TRANSLATION_SP = 15f
++    const val BG_VOCAL_EM = 0.6f
++    const val LYRICS_LINE_HEIGHT_EM = 1.17f
++    const val LYRICS_LETTER_SPACING_EM = -0.012f
++    const val LINE_PADDING_VERTICAL_DP = 9
++    const val LINE_SPACING_DP = 8
+ 
+-    const val SCROLL_VIEWPORT_OFFSET_RATIO = 0.28f
++    const val SEEK_OVERLAY_HIDE_DELAY = 450L
+ 
+     // 逐字扫描的已唱与未唱透明度
+ 
+     /** 主句已唱不透明，未唱透明度为 0.21。 */
+     const val WORD_SUNG_ALPHA = 1f
+-    const val WORD_UNSUNG_ALPHA = 0.21f
+ 
+     /** 逐字翻译和音译的已唱、未唱透明度。 */
+     const val WORD_TRANSLATION_SUNG_ALPHA = 0.92f
+@@ -237,6 +257,12 @@ private fun lineStaggerDelayMillis(distanceBelow: Int): Int {
+     return (LyricUIConstants.LINE_STAGGER_UNIT_MS * 0.25f * (5f * n - n * (n + 1) / 2f)).roundToInt()
+ }
+ 
++/** Delay of a jiggling line `distanceBelow` lines under the current one: grows per line, easing off for far lines. */
++private fun jiggleDelayMillis(
++    distanceBelow: Int,
++    delayBetweenLinesMs: Int,
++): Int = (delayBetweenLinesMs * 9f * (1f - kotlin.math.exp(-distanceBelow.coerceAtLeast(0) / 9f))).roundToInt()
++
+ /** 记录行切换时机、时长及指定时刻的演唱行。 */
+ private class LineTimeline private constructor(
+     private val lines: List<LyricItem>,
+@@ -246,6 +272,8 @@ private class LineTimeline private constructor(
+     private val transitionStartsMs: LongArray,
+     /** 前 i 行的最晚结束时刻，用于缩小扫描范围。 */
+     private val maxEndPrefixMs: LongArray,
++    /** Move duration used when a line has no entry (the Move to current line setting). */
++    private val fallbackMs: Int,
+ ) {
+     /** 返回指定时刻对应的行，尚未开始时返回 Int.MAX_VALUE。 */
+     fun indexAt(time: Long): Int {
+@@ -253,7 +281,7 @@ private class LineTimeline private constructor(
+         return if (index < 0) Int.MAX_VALUE else index
+     }
+ 
+-    fun durationAt(index: Int): Int = durationsMs.getOrElse(index) { LyricUIConstants.LINE_MOVE_MAX_DURATION_MS }
++    fun durationAt(index: Int): Int = durationsMs.getOrElse(index) { fallbackMs }
+ 
+     /** 返回指定时刻正在演唱的逐字行，支持多行重叠。 */
+     fun activeLinesAt(time: Long): Set<Int> {
+@@ -268,7 +296,10 @@ private class LineTimeline private constructor(
+     }
+ 
+     companion object {
+-        fun of(lines: List<LyricItem>): LineTimeline {
++        fun of(
++            lines: List<LyricItem>,
++            moveMs: Int,
++        ): LineTimeline {
+             val durations = IntArray(lines.size)
+             val starts = LongArray(lines.size)
+             val maxEnds = LongArray(lines.size)
+@@ -281,9 +312,9 @@ private class LineTimeline private constructor(
+                     if (previousEnd ==
+                         null
+                     ) {
+-                        LyricUIConstants.LINE_MOVE_MAX_DURATION_MS
++                        moveMs
+                     } else {
+-                        transitionDuration(line.time - previousEnd)
++                        transitionDuration(line.time - previousEnd, moveMs)
                      }
                  durations[index] = duration
--                starts[index] = line.time - duration
-+                // The move starts exactly when the line starts (no early start), like the reference window.
-+                starts[index] = line.time
-                 // 提前后可能倒序，取单调上界保证二分查找有效。
-                 if (index > 0 && starts[index] < starts[index - 1]) starts[index] = starts[index - 1]
+                 starts[index] = line.time - duration
+@@ -292,18 +323,21 @@ private class LineTimeline private constructor(
                  maxEnd = max(maxEnd, (line as? LyricItem.WordsLyric)?.endTime ?: Long.MIN_VALUE)
-@@ -660,8 +640,8 @@ fun LyricsUI(
+                 maxEnds[index] = maxEnd
+             }
+-            return LineTimeline(lines, durations, starts, maxEnds)
++            return LineTimeline(lines, durations, starts, maxEnds, moveMs)
+         }
+ 
+         /** 根据相邻行间隔计算位移时长。 */
+-        private fun transitionDuration(gapMs: Long): Int {
++        private fun transitionDuration(
++            gapMs: Long,
++            moveMs: Int,
++        ): Int {
+             val gap = gapMs.coerceIn(LyricUIConstants.LINE_GAP_MIN_MS, LyricUIConstants.LINE_GAP_MAX_MS)
+             val fraction =
+                 (gap - LyricUIConstants.LINE_GAP_MIN_MS).toFloat() /
+                     (LyricUIConstants.LINE_GAP_MAX_MS - LyricUIConstants.LINE_GAP_MIN_MS)
+             return lerp(
+-                LyricUIConstants.LINE_MOVE_MIN_DURATION_MS.toFloat(),
+-                LyricUIConstants.LINE_MOVE_MAX_DURATION_MS.toFloat(),
++                moveMs * LyricUIConstants.LINE_MOVE_SHORT_GAP_FRACTION,
++                moveMs.toFloat(),
+                 fraction,
+             ).roundToInt()
+         }
+@@ -382,54 +416,131 @@ private data class LyricsUIStyle(
+     val phoneticTextStyle: TextStyle,
+     val rubyTextStyle: TextStyle,
+     val accompanimentTextStyle: TextStyle,
++    /** Translation under background vocals. */
++    val accompanimentTranslationTextStyle: TextStyle,
+     val activeScale: Float,
+     val itemSpacing: Dp,
+     val horizontalPadding: Dp,
+     val verticalPadding: Dp,
+     /** 逐字扫描前沿的羽化宽度。 */
+     val sweepFeather: Dp,
++    /** Transliteration above (true) or below (false) the lyric words. */
++    val transliterationOnTop: Boolean,
++    /** Per-word timed transliteration (true) or a plain static line (false). */
++    val attachTransliterationToWords: Boolean,
++    /** Unsung text opacity relative to its default (50% = 1.0). */
++    val unsungFactor: Float,
+ )
+ 
+ @Composable
+-private fun rememberLyricsUIStyle(displayMode: LyricsDisplayMode): LyricsUIStyle {
++private fun rememberLyricsUIStyle(
++    displayMode: LyricsDisplayMode,
++    settings: LyricsStyleSettings,
++): LyricsUIStyle {
+     val typography = MaterialTheme.typography
+-    return remember(typography, displayMode) {
+-        when (displayMode) {
+-            LyricsDisplayMode.Fullscreen ->
++    val screenWidthDp = LocalConfiguration.current.screenWidthDp
++    return remember(typography, displayMode, settings, screenWidthDp) {
++        val built =
++            when (displayMode) {
++            LyricsDisplayMode.Fullscreen -> {
++                // Same sizes as the reference window: lyrics 8% of the width (27..36), the rest 17 / 15.
++                val lyricsSp =
++                    (screenWidthDp * LyricUIConstants.LYRICS_WIDTH_FRACTION)
++                        .coerceIn(LyricUIConstants.LYRICS_MIN_SP, LyricUIConstants.LYRICS_MAX_SP) *
++                        settings.lyricsSize / 100f
++                val weight = FontWeight(settings.lyricsWeight)
++                val lyricsStyle =
++                    typography.headlineMedium.copy(
++                        fontSize = lyricsSp.sp,
++                        fontWeight = weight,
++                        lineHeight = (lyricsSp * LyricUIConstants.LYRICS_LINE_HEIGHT_EM).sp,
++                        letterSpacing = (lyricsSp * LyricUIConstants.LYRICS_LETTER_SPACING_EM).sp,
++                    )
++                val secondary = typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
++                fun secondaryStyle(
++                    baseSp: Float,
++                    percent: Int,
++                ): TextStyle {
++                    val sp = baseSp * percent / 100f
++                    return secondary.copy(fontSize = sp.sp, lineHeight = (sp * 1.3f).sp)
++                }
++                // Lyric edge padding: clamp(16, 5.4% of width, 26); 16 dp already comes from the list itself.
++                val edgePad =
++                    (screenWidthDp * 0.054f).coerceIn(16f, 26f) - LyricUIConstants.SEEK_PREVIEW_END_PADDING
+                 LyricsUIStyle(
+-                    mainTextStyle = typography.headlineMedium,
+-                    translationTextStyle = typography.titleMedium,
+-                    wordsTextStyle = typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+-                    wordsTranslationTextStyle = typography.bodySmall,
+-                    phoneticTextStyle = typography.bodySmall,
++                    mainTextStyle = lyricsStyle,
++                    translationTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.translationSize),
++                    wordsTextStyle = lyricsStyle,
++                    wordsTranslationTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.translationSize),
++                    phoneticTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.transliterationSize),
+                     rubyTextStyle = typography.labelSmall.copy(fontSize = 10.sp),
+-                    accompanimentTextStyle = typography.titleMedium,
+-                    activeScale = 1.12f,
+-                    itemSpacing = 12.dp,
+-                    horizontalPadding = 24.dp,
+-                    verticalPadding = 16.dp,
++                    accompanimentTextStyle =
++                        lyricsStyle.copy(
++                            fontSize = (lyricsSp * LyricUIConstants.BG_VOCAL_EM).sp,
++                            lineHeight = (lyricsSp * LyricUIConstants.BG_VOCAL_EM * 1.2f).sp,
++                            fontWeight = FontWeight.SemiBold,
++                        ),
++                    accompanimentTranslationTextStyle =
++                        secondaryStyle(LyricUIConstants.BG_TRANSLATION_SP, settings.backgroundTranslationSize),
++                    activeScale = LyricUIConstants.ACTIVE_SCALE,
++                    itemSpacing = LyricUIConstants.LINE_SPACING_DP.dp,
++                    horizontalPadding = edgePad.coerceAtLeast(0f).dp,
++                    verticalPadding = LyricUIConstants.LINE_PADDING_VERTICAL_DP.dp,
+                     sweepFeather = 30.dp,
++                    transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
++                    attachTransliterationToWords = settings.attachToWords,
++                    unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
+                 )
++            }
+ 
+-            LyricsDisplayMode.Compact ->
++            LyricsDisplayMode.Compact -> {
++                fun scaled(
++                    base: TextStyle,
++                    percent: Int,
++                ): TextStyle = base.copy(fontSize = base.fontSize * (percent / 100f))
+                 LyricsUIStyle(
+-                    mainTextStyle = typography.titleLarge,
+-                    translationTextStyle = typography.bodyMedium,
+-                    wordsTextStyle = typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+-                    wordsTranslationTextStyle = typography.bodySmall,
+-                    phoneticTextStyle = typography.labelSmall,
++                    mainTextStyle = scaled(typography.titleLarge, settings.lyricsSize),
++                    translationTextStyle = scaled(typography.bodyMedium, settings.translationSize),
++                    wordsTextStyle =
++                        scaled(typography.titleLarge, settings.lyricsSize)
++                            .copy(fontWeight = FontWeight(settings.lyricsWeight)),
++                    wordsTranslationTextStyle = scaled(typography.bodySmall, settings.translationSize),
++                    phoneticTextStyle = scaled(typography.labelSmall, settings.transliterationSize),
+                     rubyTextStyle = typography.labelSmall.copy(fontSize = 8.sp),
+                     accompanimentTextStyle = typography.bodyMedium,
++                    accompanimentTranslationTextStyle = scaled(typography.bodySmall, settings.backgroundTranslationSize),
+                     activeScale = 1.06f,
+                     itemSpacing = 6.dp,
+                     horizontalPadding = 16.dp,
+                     verticalPadding = 8.dp,
+                     sweepFeather = 18.dp,
++                    transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
++                    attachTransliterationToWords = settings.attachToWords,
++                    unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
+                 )
+-        }
++            }
++            }
++        built.withFontFamily(LyricsFontOption.lyricsFamily(settings.lyricsFont))
+     }
+ }
+ 
++/** Applies the lyrics font to every lyric text style (no-op when the lyrics follow the player font). */
++private fun LyricsUIStyle.withFontFamily(family: FontFamily?): LyricsUIStyle =
++    if (family == null) {
++        this
++    } else {
++        copy(
++            mainTextStyle = mainTextStyle.copy(fontFamily = family),
++            translationTextStyle = translationTextStyle.copy(fontFamily = family),
++            wordsTextStyle = wordsTextStyle.copy(fontFamily = family),
++            wordsTranslationTextStyle = wordsTranslationTextStyle.copy(fontFamily = family),
++            phoneticTextStyle = phoneticTextStyle.copy(fontFamily = family),
++            rubyTextStyle = rubyTextStyle.copy(fontFamily = family),
++            accompanimentTextStyle = accompanimentTextStyle.copy(fontFamily = family),
++            accompanimentTranslationTextStyle = accompanimentTranslationTextStyle.copy(fontFamily = family),
++        )
++    }
++
+ // ==================== 主组件 ====================
+ 
+ /** 歌词显示组件，支持逐行、逐字高亮、拖动定位和点按跳转。 */
+@@ -440,6 +551,7 @@ fun LyricsUI(
+     currentTimeProvider: () -> Long,
+     displayMode: LyricsDisplayMode = LyricsDisplayMode.Fullscreen,
+     displayOptions: LyricsDisplayOptions = LyricsDisplayOptions(),
++    styleSettings: LyricsStyleSettings = LyricsStyleSettings(),
+     isSynced: Boolean = true,
+     onSeekToTime: (Long) -> Unit = {},
+ ) {
+@@ -457,11 +569,12 @@ fun LyricsUI(
+             lines = lyricLines,
+             displayMode = displayMode,
+             displayOptions = displayOptions,
++            styleSettings = styleSettings,
+         )
+         return
+     }
+ 
+-    val style = rememberLyricsUIStyle(displayMode)
++    val style = rememberLyricsUIStyle(displayMode, styleSettings)
+     val lazyListState = rememberLazyListState()
+     var isAutoScrolling by remember { mutableStateOf(false) }
+     val isManualScrolling by remember {
+@@ -480,7 +593,7 @@ fun LyricsUI(
+             }
+         }
+     // 滚动按时间表提前开始，逐字高亮仍使用真实时间。
+-    val timeline = remember(lyricLines) { LineTimeline.of(lyricLines) }
++    val timeline = remember(lyricLines, styleSettings.moveDurationMs) { LineTimeline.of(lyricLines, styleSettings.moveDurationMs) }
+     val playingIndex by remember(timeline) {
+         derivedStateOf { timeline.indexAt(currentTimeState.value) }
+     }
+@@ -542,9 +655,14 @@ fun LyricsUI(
+             // 选择线位于视口中央，边缘歌词保留半个视口空白。
+             val selectionPadding = with(density) { constraints.maxHeight.toDp() / 2 }
+             val playbackAnchorOffsetPx =
+-                constraints.maxHeight * LyricUIConstants.SCROLL_VIEWPORT_OFFSET_RATIO
++                constraints.maxHeight * (styleSettings.currentLinePosition / 100f)
+             val bottomFlyInOffsetPx = with(density) { LyricUIConstants.BOTTOM_FLY_IN_OFFSET.roundToPx() }
              val keepAliveZone = LyricUIConstants.KEEP_ALIVE_ZONE
-             // Jiggle: lines below the current one spring into place (Lyrics settings > Jiggle effect).
-             val jiggleSpec =
--                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs) {
--                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs)
-+                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs, density.density) {
-+                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs, density.density)
-                 }
++            // Jiggle: lines below the current one spring into place (Lyrics settings > Jiggle effect).
++            val jiggleSpec =
++                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs) {
++                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs)
++                }
              val keepAliveZonePx = with(density) { keepAliveZone.toPx() }
  
-@@ -692,7 +672,7 @@ fun LyricsUI(
- 
-             val highlightedIndex = if (showSeekOverlay) previewIndex else playingIndex
-             // 当前行切换时长及下方各行的错峰延迟。
--            val lineMoveDurationMillis = timeline.durationAt(playingIndex)
-+            val lineMoveDurationMillis = styleSettings.moveDurationMs
- 
-             LazyColumn(
-                 modifier =
-@@ -741,19 +721,18 @@ fun LyricsUI(
+             LaunchedEffect(playingIndex, showSeekOverlay, lyricLines) {
+@@ -609,7 +727,7 @@ fun LyricsUI(
+                         index == highlightedIndex ||
+                             (!showSeekOverlay && index in activeLineIndices)
+                     val distanceFromActive = if (isActive) 0 else calculateDistance(index, highlightedIndex)
+-                    val emphasis = calculateEmphasis(distanceFromActive)
++                    val lineAlpha = calculateLineAlpha(distanceFromActive, styleSettings.unsungOpacity)
+                     // 动画值仅在图层绘制阶段读取，避免动画期间重组可见行。
+                     val scaleState =
+                         animateFloatAsState(
+@@ -619,17 +737,22 @@ fun LyricsUI(
+                         )
+                     val alphaState =
+                         animateFloatAsState(
+-                            targetValue = emphasis,
++                            targetValue = lineAlpha,
                              label = "lyricAlpha",
                              animationSpec = if (distanceFromActive == 0) ActiveAlphaSpec else InactiveAlphaSpec,
                          )
--                    val blurRadius = calculateBlurDp(distanceFromActive, styleSettings.blur).dp
-+                    val blurRadius by
-+                        animateFloatAsState(
-+                            targetValue = calculateBlurDp(distanceFromActive, styleSettings.blur),
-+                            animationSpec = LineBlurSpec,
-+                            label = "lyricBlur",
-+                        )
+-                    val blurRadius = ((1f - emphasis) * LyricUIConstants.MAX_BLUR_RADIUS).dp
++                    val blurRadius = calculateBlurDp(distanceFromActive, styleSettings.blur).dp
  
-                     val isBelowPlaying = playingIndex in lyricLines.indices && index > playingIndex
-                     val jiggleLine = styleSettings.jiggleEnabled && isBelowPlaying
-+                    // Each jiggling line waits a little longer than the one above it; the wait levels off for far lines.
++                    val isBelowPlaying = playingIndex in lyricLines.indices && index > playingIndex
++                    val jiggleLine = styleSettings.jiggleEnabled && isBelowPlaying
                      val staggerDelayMillis =
--                        when {
--                            // Each line waits a little longer than the one above it; the wait levels off for far lines.
--                            jiggleLine ->
--                                jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs)
--
--                            isBelowPlaying -> lineStaggerDelayMillis(index - playingIndex)
--                            else -> 0
--                        }
-+                        if (jiggleLine) jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs) else 0
+-                        if (playingIndex in lyricLines.indices && index > playingIndex) {
+-                            lineStaggerDelayMillis(index - playingIndex)
+-                        } else {
+-                            0
++                        when {
++                            // Each line waits a little longer than the one above it; the wait levels off for far lines.
++                            jiggleLine ->
++                                jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs)
++
++                            isBelowPlaying -> lineStaggerDelayMillis(index - playingIndex)
++                            else -> 0
+                         }
                      val songPart = line.songPartLabel()
                      val previousSongPart = lyricLines.getOrNull(index - 1)?.songPartLabel()
-                     val showSongPart =
-@@ -784,7 +763,7 @@ fun LyricsUI(
-                                 isActive = isActive,
-                                 alphaProvider = { alphaState.value },
-                                 scaleProvider = { scaleState.value },
--                                blurRadius = blurRadius,
-+                                blurRadius = blurRadius.dp,
-                                 style = style,
-                                 voiceAccent = lineAccent,
-                                 alignEnd = alignEnd,
-@@ -802,7 +781,7 @@ fun LyricsUI(
-                                 isActive = isActive,
-                                 alphaProvider = { alphaState.value },
-                                 scaleProvider = { scaleState.value },
--                                blurRadius = blurRadius,
-+                                blurRadius = blurRadius.dp,
-                                 style = style,
-                                 textMeasurer = textMeasurer,
-                                 agents = lineAgents,
-diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
-index 0349257..269a2d6 100644
---- a/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
-+++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
-@@ -1,9 +1,10 @@
- package me.spica27.spicamusic.ui.widget
- 
--import androidx.compose.animation.core.CubicBezierEasing
-+import androidx.compose.animation.core.Animatable
- import androidx.compose.animation.core.DeferredTargetAnimation
- import androidx.compose.animation.core.Easing
- import androidx.compose.animation.core.FiniteAnimationSpec
-+import androidx.compose.animation.core.LinearEasing
- import androidx.compose.animation.core.VectorConverter
- import androidx.compose.animation.core.snap
- import androidx.compose.animation.core.tween
-@@ -21,48 +22,68 @@ import androidx.compose.ui.unit.Constraints
- import androidx.compose.ui.unit.IntOffset
- import androidx.compose.ui.unit.IntSize
- import androidx.compose.ui.unit.round
--import kotlin.math.PI
--import kotlin.math.cos
-+import kotlin.math.abs
- import kotlin.math.exp
--import kotlin.math.ln
-+import kotlin.math.max
-+import kotlin.math.roundToInt
- import kotlin.math.sin
-+import kotlinx.coroutines.Job
-+import kotlinx.coroutines.launch
- 
--/** 歌词行位移曲线，先缓后快再减速。 */
--internal val LyricLineMoveEasing = CubicBezierEasing(0.4f, 0.1f, 0f, 1f)
-+/**
-+ * Glide shared by every line (current, above and below), the same curve as the reference lyrics window:
-+ * `1 - (1 + 9t) * e^(-9t)` with t running to 1.1 over the move time. Fast at first, then a long soft landing.
-+ */
-+internal val LyricLineMoveEasing =
-+    Easing { x ->
-+        if (x <= 0f) {
-+            0f
-+        } else if (x >= 1f) {
-+            1f
-+        } else {
-+            val t = x * 1.1f
-+            1f - (1f + 9f * t) * exp(-9f * t)
+@@ -644,6 +767,7 @@ fun LyricsUI(
+                             isManualScrolling = isManualScrolling,
+                             durationMillis = lineMoveDurationMillis,
+                             delayMillis = staggerDelayMillis,
++                            jiggle = if (jiggleLine) jiggleSpec else null,
+                             initialOffsetY =
+                                 if (index > playingIndex) bottomFlyInOffsetPx else 0,
+                         )
+@@ -738,8 +862,9 @@ private fun PlainLyricsList(
+     lines: List<LyricItem>,
+     displayMode: LyricsDisplayMode,
+     displayOptions: LyricsDisplayOptions,
++    styleSettings: LyricsStyleSettings,
+ ) {
+-    val style = rememberLyricsUIStyle(displayMode)
++    val style = rememberLyricsUIStyle(displayMode, styleSettings)
+     val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+     LazyColumn(
+         modifier = modifier.fillMaxSize(),
+@@ -832,6 +957,20 @@ private fun LyricLine(
+     val activeTextColor = voiceAccent ?: MaterialTheme.colorScheme.onSurface
+     val horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
+     val textAlign = if (alignEnd) TextAlign.End else TextAlign.Start
++    val phoneticBlock: @Composable () -> Unit = {
++        if (!lyric.phonetic.isNullOrBlank()) {
++            val onTop = style.transliterationOnTop
++            if (!onTop) Spacer(modifier = Modifier.height(2.dp))
++            Text(
++                text = lyric.phonetic!!,
++                style = style.phoneticTextStyle,
++                color = (if (isActive) activeTextColor else inactiveTextColor).copy(alpha = 0.72f),
++                textAlign = textAlign,
++                overflow = TextOverflow.Ellipsis,
++            )
++            if (onTop) Spacer(modifier = Modifier.height(2.dp))
 +        }
 +    }
+     val blurEffect = rememberLineBlurEffect(blurRadius)
  
- /**
-- * Apple Music-style jiggle for lines below the current one: the line overshoots its new position
-- * and settles back like a damped spring.
-+ * Apple Music-style jiggle for the lines below the current one, as in the reference lyrics window:
-+ * on top of the shared glide the line gets a small wobble of FIXED size in dp (it does not depend on how far
-+ * the list moved) that overshoots against the direction of travel and dies out over [durationMillis].
-  *
-- * @param strength 10..100 (%). Sets how far the line overshoots: 100% overshoots by about 30% of the move.
-- * @param durationMillis time the line takes to settle.
-+ * @param strength 10..100 (%). Sets the size of the wobble (6 dp at 0% up to 26 dp at 100%) and how fast it rings.
-+ * @param durationMillis time the wobble takes to settle.
-  */
- internal class JiggleSpec(
-     val strength: Int,
-     val durationMillis: Int,
-+    density: Float,
- ) {
--    /** Step response of an under-damped spring: starts and ends at rest, overshoots by `strength * 0.3%`. */
--    val easing: Easing =
-+    private val s = strength / 100f
-+
-+    /** Size of the wobble in pixels. */
-+    val amplitudePx: Float = (6f + 20f * s) * density
-+    private val decay = 6.5f - 2f * s
-+    private val frequency = 9f + 2f * s
-+    private val peak: Float =
-         run {
--            val overshoot = (strength / 100f * MAX_OVERSHOOT).coerceIn(0.01f, 0.6f)
--            // Decay rate fixed so the motion has died out at the end; the frequency follows from the overshoot.
--            val decay = DECAY
--            val omega = decay * PI.toFloat() / -ln(overshoot)
--            val k = decay / omega
--            Easing { t ->
--                if (t <= 0f) {
--                    0f
--                } else if (t >= 1f) {
--                    1f
--                } else {
--                    1f - exp(-decay * t) * (cos(omega * t) + k * sin(omega * t))
--                }
-+            var m = 0f
-+            for (i in 0..400) {
-+                val x = i / 400f * RUN
-+                m = max(m, abs(exp(-decay * x) * sin(frequency * x)))
-             }
-+            m
+     Column(
+@@ -865,6 +1004,8 @@ private fun LyricLine(
+             Spacer(modifier = Modifier.height(4.dp))
          }
  
-+    /** Wobble at [progress] 0..1 of its duration, normalised to -1..1. */
-+    fun wobble(progress: Float): Float {
-+        if (progress <= 0f || progress >= 1f || peak <= 0f) return 0f
-+        val x = progress * RUN
-+        return exp(-decay * x) * sin(frequency * x) / peak
-+    }
++        if (style.transliterationOnTop) phoneticBlock()
 +
-     private companion object {
--        const val MAX_OVERSHOOT = 0.3f
--        const val DECAY = 6f
-+        const val RUN = 1.1f
-     }
- }
- 
-@@ -83,6 +104,14 @@ private class LinePlacementModifierNode(
-     private var offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
-     private var isFirstFrame = true
- 
-+    /** Progress 0..1 of the jiggle wobble of the current move. */
-+    private val wobble = Animatable(0f)
-+    private var wobbleJob: Job? = null
-+
-+    /** +1 when the list moved forward (lines travel up), -1 when it moved back. */
-+    private var wobbleDirection = 1f
-+    private var lastTarget: IntOffset? = null
-+
-     override fun isMeasurementApproachInProgress(lookaheadSize: IntSize): Boolean = false
- 
-     override fun Placeable.PlacementScope.isPlacementApproachInProgress(lookaheadCoordinates: LayoutCoordinates): Boolean {
-@@ -91,7 +120,7 @@ private class LinePlacementModifierNode(
-                 lookaheadScopeCoordinates.localLookaheadPositionOf(lookaheadCoordinates).round()
-             }
-         updatePlacementTarget(target)
--        return !offsetAnimation.isIdle
-+        return !offsetAnimation.isIdle || wobble.isRunning
-     }
- 
-     override fun ApproachMeasureScope.approachMeasure(
-@@ -117,19 +146,16 @@ private class LinePlacementModifierNode(
-                     lookaheadScopeCoordinates.localPositionOf(coordinates, Offset.Zero).round()
-                 }
-             val delta = animatedOffset - placementOffset
--            placeable.place(delta.x, delta.y)
-+            // The wobble goes against the direction of travel, so a line overshoots and then settles back.
-+            val wobbleY =
-+                jiggle?.let { -wobbleDirection * it.amplitudePx * it.wobble(wobble.value) } ?: 0f
-+            placeable.place(delta.x, delta.y + wobbleY.roundToInt())
-         }
-     }
- 
-     private fun animationSpec(): FiniteAnimationSpec<IntOffset> =
-         if (isManualScrolling) {
-             snap()
--        } else if (jiggle != null) {
--            tween(
--                durationMillis = jiggle!!.durationMillis,
--                delayMillis = delayMillis,
--                easing = jiggle!!.easing,
--            )
-         } else {
-             tween(
-                 durationMillis = durationMillis,
-@@ -138,8 +164,29 @@ private class LinePlacementModifierNode(
+         Text(
+             text = lyric.content.ifBlank { LyricUIConstants.EMPTY_WORD_PLACEHOLDER },
+             style = style.mainTextStyle,
+@@ -880,7 +1021,7 @@ private fun LyricLine(
+                 displayOptions.preferredTranslationLanguage,
+             )
+         translations.forEach { translation ->
+-            Spacer(modifier = Modifier.height(6.dp))
++            Spacer(modifier = Modifier.height(3.dp))
+             Text(
+                 text = translation.content,
+                 style = style.translationTextStyle,
+@@ -895,16 +1036,7 @@ private fun LyricLine(
              )
          }
  
-+    /** Starts the wobble when the line's target position changes (a new current line). */
-+    private fun noteTargetChange(target: IntOffset) {
-+        val previous = lastTarget
-+        lastTarget = target
-+        if (previous == null || previous == target || isManualScrolling) return
-+        val spec = jiggle
-+        wobbleJob?.cancel()
-+        if (spec == null) {
-+            wobbleJob = coroutineScope.launch { wobble.snapTo(0f) }
-+            return
-+        }
-+        wobbleDirection = if (target.y - previous.y < 0) 1f else -1f
-+        val wait = delayMillis
-+        wobbleJob =
-+            coroutineScope.launch {
-+                wobble.snapTo(0f)
-+                wobble.animateTo(1f, tween(durationMillis = spec.durationMillis, delayMillis = wait, easing = LinearEasing))
-+            }
-+    }
-+
-     /** 首次组合的底部歌词先下移，再补间到目标位置。 */
-     private fun updatePlacementTarget(target: IntOffset): IntOffset {
-+        noteTargetChange(target)
-         if (isFirstFrame) {
-             isFirstFrame = false
-             if (initialOffsetY != 0 && !isManualScrolling) {
-@@ -183,6 +230,8 @@ private class LinePlacementModifierNode(
-     private fun resetAnimation() {
-         offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
-         isFirstFrame = true
-+        lastTarget = null
-+        wobbleJob?.cancel()
+-        if (!lyric.phonetic.isNullOrBlank()) {
+-            Spacer(modifier = Modifier.height(4.dp))
+-            Text(
+-                text = lyric.phonetic!!,
+-                style = style.phoneticTextStyle,
+-                color = (if (isActive) activeTextColor else inactiveTextColor).copy(alpha = 0.72f),
+-                textAlign = textAlign,
+-                overflow = TextOverflow.Ellipsis,
+-            )
+-        }
++        if (!style.transliterationOnTop) phoneticBlock()
      }
  }
  
+@@ -1135,9 +1267,10 @@ private fun DrawScope.drawSweepMasks(
+     val litFraction = registry.litFraction.value
+     for (block in registry.blocks) {
+         val sweep = block.sweep.value
+-        val dimColor = Color.Black.copy(alpha = block.dimAlpha)
+-        // 已唱侧在未唱透明度和不透明之间插值。
+-        val litAlpha = block.dimAlpha + (1f - block.dimAlpha) * litFraction
++        // A line that is not current shows every word at full strength (the line's own opacity dims it).
++        // The current line dims only its not-yet-sung words, down to the Unsung text opacity.
++        val dimColor = Color.Black.copy(alpha = 1f - (1f - block.dimAlpha) * litFraction)
++        val litAlpha = 1f
+         val litColor = Color.Black.copy(alpha = litAlpha)
+         val wordCount = block.wordCoordinates.size
+         var rowStart = 0
+@@ -1304,6 +1437,47 @@ private fun WordsLyricLine(
+         )
+     // 整行在同一个离屏图层中完成透明度、缩放、模糊和扫描。
+     val maskRegistry = remember(litFractionState) { SweepMaskRegistry(litFractionState) }
++    val transliterations =
++        lyric.transliterations.visibleTransliterations(
++            displayOptions.transliterationMode,
++            displayOptions.preferredTransliterationLanguage,
++        )
++    // Transliteration sits under the words by default, or above them (Top).
++    val transliterationBlock: @Composable () -> Unit = {
++        val onTop = style.transliterationOnTop
++        if (transliterations.isNotEmpty()) {
++            transliterations.forEach { transliteration ->
++                if (!onTop) Spacer(modifier = Modifier.height(2.dp))
++                TranslationLine(
++                    translation = transliteration,
++                    currentTimeState = currentTimeState,
++                    style = style,
++                    color = transliterationColor,
++                    sungAlpha = LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA,
++                    unsungAlpha =
++                        (LyricUIConstants.WORD_TRANSLITERATION_UNSUNG_ALPHA * style.unsungFactor)
++                            .coerceIn(0f, LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA),
++                    textAlign = textAlign,
++                    maskRegistry = maskRegistry,
++                    textMeasurer = textMeasurer,
++                    displayOptions = displayOptions,
++                    textStyle = style.phoneticTextStyle,
++                    timed = style.attachTransliterationToWords,
++                )
++                if (onTop) Spacer(modifier = Modifier.height(2.dp))
++            }
++        } else if (!lyric.phonetic.isNullOrBlank()) {
++            if (!onTop) Spacer(modifier = Modifier.height(2.dp))
++            Text(
++                text = lyric.phonetic!!,
++                style = style.phoneticTextStyle,
++                color = transliterationColor,
++                textAlign = textAlign,
++                overflow = TextOverflow.Ellipsis,
++            )
++            if (onTop) Spacer(modifier = Modifier.height(2.dp))
++        }
++    }
+     val blurEffect = rememberLineBlurEffect(blurRadius)
+     val sweepFeatherPx = with(LocalDensity.current) { style.sweepFeather.toPx() }
+     Column(
+@@ -1357,6 +1531,8 @@ private fun WordsLyricLine(
+             )
+         }
+ 
++        if (style.transliterationOnTop) transliterationBlock()
++
+         if (sentence.isNotBlank()) {
+             ProgressiveWordsText(
+                 text = sentence,
+@@ -1365,7 +1541,7 @@ private fun WordsLyricLine(
+                 textStyle = style.wordsTextStyle,
+                 color = textColor,
+                 sungAlpha = LyricUIConstants.WORD_SUNG_ALPHA,
+-                unsungAlpha = LyricUIConstants.WORD_UNSUNG_ALPHA,
++                unsungAlpha = (LyricUIConstants.INACTIVE_LINE_ALPHA * style.unsungFactor).coerceIn(0f, 1f),
+                 maskRegistry = maskRegistry,
+                 textMeasurer = textMeasurer,
+                 modifier = Modifier.fillMaxWidth(),
+@@ -1376,38 +1552,7 @@ private fun WordsLyricLine(
+             )
+         }
+ 
+-        val transliterations =
+-            lyric.transliterations.visibleTransliterations(
+-                displayOptions.transliterationMode,
+-                displayOptions.preferredTransliterationLanguage,
+-            )
+-        if (transliterations.isNotEmpty()) {
+-            transliterations.forEach { transliteration ->
+-                Spacer(modifier = Modifier.height(4.dp))
+-                TranslationLine(
+-                    translation = transliteration,
+-                    currentTimeState = currentTimeState,
+-                    style = style,
+-                    color = transliterationColor,
+-                    sungAlpha = LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA,
+-                    unsungAlpha = LyricUIConstants.WORD_TRANSLITERATION_UNSUNG_ALPHA,
+-                    textAlign = textAlign,
+-                    maskRegistry = maskRegistry,
+-                    textMeasurer = textMeasurer,
+-                    displayOptions = displayOptions,
+-                    textStyle = style.phoneticTextStyle,
+-                )
+-            }
+-        } else if (!lyric.phonetic.isNullOrBlank()) {
+-            Spacer(modifier = Modifier.height(4.dp))
+-            Text(
+-                text = lyric.phonetic!!,
+-                style = style.phoneticTextStyle,
+-                color = transliterationColor,
+-                textAlign = textAlign,
+-                overflow = TextOverflow.Ellipsis,
+-            )
+-        }
++        if (!style.transliterationOnTop) transliterationBlock()
+ 
+         val translations =
+             lyric.translationVariantsFor(
+@@ -1415,14 +1560,16 @@ private fun WordsLyricLine(
+                 displayOptions.preferredTranslationLanguage,
+             )
+         translations.forEach { translation ->
+-            Spacer(modifier = Modifier.height(6.dp))
++            Spacer(modifier = Modifier.height(3.dp))
+             TranslationLine(
+                 translation = translation,
+                 currentTimeState = currentTimeState,
+                 style = style,
+                 color = translationColor,
+                 sungAlpha = LyricUIConstants.WORD_TRANSLATION_SUNG_ALPHA,
+-                unsungAlpha = LyricUIConstants.WORD_TRANSLATION_UNSUNG_ALPHA,
++                unsungAlpha =
++                    (LyricUIConstants.WORD_TRANSLATION_UNSUNG_ALPHA * style.unsungFactor)
++                        .coerceIn(0f, LyricUIConstants.WORD_TRANSLATION_SUNG_ALPHA),
+                 textAlign = textAlign,
+                 maskRegistry = maskRegistry,
+                 textMeasurer = textMeasurer,
+@@ -1645,6 +1792,8 @@ private fun TranslationLine(
+     textMeasurer: TextMeasurer,
+     displayOptions: LyricsDisplayOptions,
+     textStyle: TextStyle = style.wordsTranslationTextStyle,
++    /** False draws the line as plain static text instead of timing it word by word. */
++    timed: Boolean = true,
+ ) {
+     val words =
+         remember(translation, displayOptions.obscureObscene) {
+@@ -1657,7 +1806,7 @@ private fun TranslationLine(
+         remember(translation, words) {
+             words.joinToString(separator = "") { it.content }.ifBlank { translation.content }
+         }
+-    if (words.isNotEmpty()) {
++    if (words.isNotEmpty() && timed) {
+         ProgressiveWordsText(
+             text = text,
+             words = words,
+@@ -1853,6 +2002,7 @@ private fun AccompanimentLine(
+                     maskRegistry = maskRegistry,
+                     textMeasurer = textMeasurer,
+                     displayOptions = displayOptions,
++                    textStyle = style.accompanimentTranslationTextStyle,
+                 )
+             }
+         }
+@@ -2324,9 +2474,27 @@ private fun calculateDistance(
+         abs(index - highlightedIndex)
+     }
+ 
+-/** 根据距离计算透明度和模糊程度。 */
+-private fun calculateEmphasis(distance: Int): Float =
+-    (1f - distance * LyricUIConstants.EMPHASIS_FACTOR).coerceIn(
+-        LyricUIConstants.MIN_EMPHASIS,
+-        1f,
+-    )
++/** Opacity of a line: the current line is fully visible, every other line uses the Unsung text opacity. */
++private fun calculateLineAlpha(
++    distance: Int,
++    unsungPercent: Int,
++): Float =
++    if (distance == 0) {
++        1f
++    } else {
++        (LyricUIConstants.INACTIVE_LINE_ALPHA * unsungPercent / LyricUIConstants.UNSUNG_DEFAULT_PERCENT)
++            .coerceIn(0f, 1f)
++    }
++
++/** Blur of a line in dp: none on the current line, then 2.5 dp growing by 1.2 dp per line up to 6 dp, scaled by the Blur slider. */
++private fun calculateBlurDp(
++    distance: Int,
++    blurPercent: Int,
++): Float {
++    if (distance == 0 || blurPercent <= 0) return 0f
++    val steps = (distance - 1).coerceAtLeast(0).coerceAtMost(10)
++    val base =
++        (LyricUIConstants.BLUR_FIRST_LINE_DP + steps * LyricUIConstants.BLUR_STEP_DP)
++            .coerceAtMost(LyricUIConstants.MAX_BLUR_RADIUS)
++    return base * blurPercent / 100f
++}
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsFonts.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsFonts.kt
+new file mode 100644
+index 0000000..e64bd19
+--- /dev/null
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsFonts.kt
+@@ -0,0 +1,60 @@
++package me.spica27.spicamusic.ui.widget
++
++import androidx.annotation.StringRes
++import androidx.compose.material3.Typography
++import androidx.compose.ui.text.font.FontFamily
++import me.spica27.spicamusic.R
++
++/**
++ * Fonts the user can pick for the player and for the lyrics.
++ * [id] is what gets stored in the settings; [family] is null for "Default" (the app's own font).
++ */
++enum class LyricsFontOption(
++    val id: String,
++    @StringRes val labelRes: Int,
++    val family: FontFamily?,
++) {
++    Default("default", R.string.lyr_set_font_default, null),
++    System("system", R.string.lyr_set_font_system, FontFamily.SansSerif),
++    Serif("serif", R.string.lyr_set_font_serif, FontFamily.Serif),
++    Monospace("mono", R.string.lyr_set_font_mono, FontFamily.Monospace),
++    Cursive("cursive", R.string.lyr_set_font_cursive, FontFamily.Cursive),
++    ;
++
++    companion object {
++        fun fromId(id: String?): LyricsFontOption = entries.firstOrNull { it.id == id } ?: Default
++
++        /**
++         * Font family for the lyrics only. Returns null when the lyrics should simply follow the player font
++         * ("same"), otherwise the chosen family (the plain default font when "Default" is chosen).
++         */
++        fun lyricsFamily(lyricsFont: String): FontFamily? =
++            if (lyricsFont == SAME_AS_PLAYER) null else fromId(lyricsFont).family ?: FontFamily.Default
++
++        const val SAME_AS_PLAYER = "same"
++    }
++}
++
++/** Applies [family] to every text style of the typography (no-op when null). */
++fun Typography.withFontFamily(family: FontFamily?): Typography =
++    if (family == null) {
++        this
++    } else {
++        copy(
++            displayLarge = displayLarge.copy(fontFamily = family),
++            displayMedium = displayMedium.copy(fontFamily = family),
++            displaySmall = displaySmall.copy(fontFamily = family),
++            headlineLarge = headlineLarge.copy(fontFamily = family),
++            headlineMedium = headlineMedium.copy(fontFamily = family),
++            headlineSmall = headlineSmall.copy(fontFamily = family),
++            titleLarge = titleLarge.copy(fontFamily = family),
++            titleMedium = titleMedium.copy(fontFamily = family),
++            titleSmall = titleSmall.copy(fontFamily = family),
++            bodyLarge = bodyLarge.copy(fontFamily = family),
++            bodyMedium = bodyMedium.copy(fontFamily = family),
++            bodySmall = bodySmall.copy(fontFamily = family),
++            labelLarge = labelLarge.copy(fontFamily = family),
++            labelMedium = labelMedium.copy(fontFamily = family),
++            labelSmall = labelSmall.copy(fontFamily = family),
++        )
++    }
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsComponents.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsComponents.kt
+new file mode 100644
+index 0000000..b0d806b
+--- /dev/null
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsComponents.kt
+@@ -0,0 +1,170 @@
++package me.spica27.spicamusic.ui.widget
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.foundation.layout.FlowRow
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.FilterChip
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Slider
++import androidx.compose.material3.Switch
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import kotlin.math.roundToInt
++
++/** Section title such as "FONT" or "TEXT SIZE". */
++@Composable
++internal fun LyricsSettingsSection(title: String) {
++    Text(
++        text = title.uppercase(),
++        style = MaterialTheme.typography.labelMedium,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        modifier = Modifier.padding(top = 20.dp, bottom = 4.dp),
++    )
++}
++
++/** Label + short description shown above a control. */
++@Composable
++private fun LabelBlock(
++    label: String,
++    description: String,
++    trailing: String? = null,
++) {
++    Row(
++        modifier = Modifier.fillMaxWidth(),
++        verticalAlignment = Alignment.CenterVertically,
++        horizontalArrangement = Arrangement.SpaceBetween,
++    ) {
++        Text(
++            text = label,
++            style = MaterialTheme.typography.bodyLarge,
++            color = MaterialTheme.colorScheme.onSurface,
++            modifier = Modifier.weight(1f),
++        )
++        if (trailing != null) {
++            Text(
++                text = trailing,
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++    }
++    if (description.isNotEmpty()) {
++        Text(
++            text = description,
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++    }
++}
++
++/**
++ * Slider over an Int range. The thumb follows the finger smoothly, and [onValueChange] is called
++ * with a value already snapped to [step] on every change (the lyrics update live while dragging).
++ */
++@Composable
++internal fun LyricsSettingsSlider(
++    label: String,
++    description: String,
++    value: Int,
++    range: IntRange,
++    step: Int,
++    valueText: (Int) -> String,
++    onValueChange: (Int) -> Unit,
++) {
++    var dragValue by remember { mutableStateOf<Float?>(null) }
++    val shown = dragValue ?: value.toFloat()
++    val snapped = (shown / step).roundToInt() * step
++    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
++        LabelBlock(label = label, description = description, trailing = valueText(snapped.coerceIn(range)))
++        Slider(
++            value = shown,
++            onValueChange = {
++                dragValue = it
++                val v = ((it / step).roundToInt() * step).coerceIn(range)
++                if (v != value) onValueChange(v)
++            },
++            onValueChangeFinished = { dragValue = null },
++            valueRange = range.first.toFloat()..range.last.toFloat(),
++            steps = ((range.last - range.first) / step - 1).coerceAtLeast(0),
++        )
++    }
++}
++
++/** Row of selectable chips (single choice). Each chip can use its own font to preview it. */
++@OptIn(ExperimentalLayoutApi::class)
++@Composable
++internal fun <T> LyricsSettingsChips(
++    label: String,
++    description: String,
++    options: List<T>,
++    selected: T,
++    optionLabel: @Composable (T) -> String,
++    optionFont: (T) -> FontFamily? = { null },
++    onSelect: (T) -> Unit,
++) {
++    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
++        LabelBlock(label = label, description = description)
++        FlowRow(
++            modifier = Modifier.padding(top = 8.dp),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            options.forEach { option ->
++                FilterChip(
++                    selected = option == selected,
++                    onClick = { onSelect(option) },
++                    label = {
++                        Text(
++                            text = optionLabel(option),
++                            style = TextStyle(fontFamily = optionFont(option)),
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                    },
++                )
++            }
++        }
++    }
++}
++
++/** Label + switch. Used by the sections that come with the next parts. */
++@Composable
++internal fun LyricsSettingsToggle(
++    label: String,
++    description: String,
++    checked: Boolean,
++    onCheckedChange: (Boolean) -> Unit,
++) {
++    Row(
++        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
++        verticalAlignment = Alignment.CenterVertically,
++        horizontalArrangement = Arrangement.spacedBy(12.dp),
++    ) {
++        Column(modifier = Modifier.weight(1f)) {
++            LabelBlock(label = label, description = description)
++        }
++        Switch(checked = checked, onCheckedChange = onCheckedChange)
++    }
++}
++
++@Composable
++internal fun LyricsSettingsResetButton(
++    text: String,
++    onClick: () -> Unit,
++) {
++    TextButton(onClick = onClick) { Text(text) }
++}
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsSheet.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsSheet.kt
+new file mode 100644
+index 0000000..a73f152
+--- /dev/null
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricsSettingsSheet.kt
+@@ -0,0 +1,299 @@
++package me.spica27.spicamusic.ui.widget
++
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.navigationBarsPadding
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.ModalBottomSheet
++import androidx.compose.material3.rememberModalBottomSheetState
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.unit.dp
++import me.spica27.spicamusic.R
++import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
++import me.spica27.spicamusic.core.preferences.TransliterationPosition
++
++/**
++ * Settings sheet of the lyrics window (opened from the lyrics tool button).
++ *
++ * Sections: Font, Text size, Transliteration, Lyrics blur and opacity, Jiggle.
++ */
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun LyricsSettingsSheet(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++    onDismiss: () -> Unit,
++) {
++    ModalBottomSheet(
++        onDismissRequest = onDismiss,
++        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
++    ) {
++        Column(
++            modifier =
++                Modifier
++                    .fillMaxWidth()
++                    .verticalScroll(rememberScrollState())
++                    .padding(horizontal = 24.dp)
++                    .navigationBarsPadding()
++                    .padding(bottom = 24.dp),
++        ) {
++            FontSection(settings = settings, onUpdate = onUpdate)
++            TextSizeSection(settings = settings, onUpdate = onUpdate)
++            TransliterationSection(settings = settings, onUpdate = onUpdate)
++            BlurAndOpacitySection(settings = settings, onUpdate = onUpdate)
++            JiggleSection(settings = settings, onUpdate = onUpdate)
++        }
++    }
++}
++
++@Composable
++private fun FontSection(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++) {
++    LyricsSettingsSection(stringResource(R.string.lyr_set_section_font))
++
++    LyricsSettingsChips(
++        label = stringResource(R.string.lyr_set_font_style),
++        description = stringResource(R.string.lyr_set_font_style_desc),
++        options = LyricsFontOption.entries,
++        selected = LyricsFontOption.fromId(settings.fontStyle),
++        optionLabel = { stringResource(it.labelRes) },
++        optionFont = { it.family },
++        onSelect = { option -> onUpdate { it.copy(fontStyle = option.id) } },
++    )
++
++    // "Same as player" + every font
++    val lyricsFontOptions = listOf<String>(LyricsFontOption.SAME_AS_PLAYER) + LyricsFontOption.entries.map { it.id }
++    LyricsSettingsChips(
++        label = stringResource(R.string.lyr_set_lyrics_font),
++        description = stringResource(R.string.lyr_set_lyrics_font_desc),
++        options = lyricsFontOptions,
++        selected = settings.lyricsFont,
++        optionLabel = { id ->
++            if (id == LyricsFontOption.SAME_AS_PLAYER) {
++                stringResource(R.string.lyr_set_font_same)
++            } else {
++                stringResource(LyricsFontOption.fromId(id).labelRes)
++            }
++        },
++        optionFont = { id -> if (id == LyricsFontOption.SAME_AS_PLAYER) null else LyricsFontOption.fromId(id).family },
++        onSelect = { id -> onUpdate { it.copy(lyricsFont = id) } },
++    )
++
++    val weightLabels =
++        mapOf(
++            400 to stringResource(R.string.lyr_set_weight_regular),
++            500 to stringResource(R.string.lyr_set_weight_medium),
++            600 to stringResource(R.string.lyr_set_weight_semibold),
++            700 to stringResource(R.string.lyr_set_weight_bold),
++            800 to stringResource(R.string.lyr_set_weight_extra_bold),
++        )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_weight),
++        description = stringResource(R.string.lyr_set_weight_desc),
++        value = settings.lyricsWeight,
++        range = LyricsStyleSettings.WEIGHT_RANGE,
++        step = 100,
++        valueText = { weightLabels[it] ?: it.toString() },
++        onValueChange = { v -> onUpdate { it.copy(lyricsWeight = v) } },
++    )
++
++    LyricsSettingsResetButton(
++        text = stringResource(R.string.lyr_set_reset_fonts),
++        onClick = {
++            onUpdate {
++                it.copy(
++                    fontStyle = LyricsStyleSettings().fontStyle,
++                    lyricsFont = LyricsStyleSettings().lyricsFont,
++                    lyricsWeight = LyricsStyleSettings.DEFAULT_WEIGHT,
++                )
++            }
++        },
++    )
++}
++
++@Composable
++private fun TextSizeSection(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++) {
++    LyricsSettingsSection(stringResource(R.string.lyr_set_section_text_size))
++    val percent: (Int) -> String = { "$it%" }
++
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_lyrics_size),
++        description = stringResource(R.string.lyr_set_lyrics_size_desc),
++        value = settings.lyricsSize,
++        range = LyricsStyleSettings.LYRICS_SIZE_RANGE,
++        step = 5,
++        valueText = percent,
++        onValueChange = { v -> onUpdate { it.copy(lyricsSize = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_transliteration_size),
++        description = stringResource(R.string.lyr_set_transliteration_size_desc),
++        value = settings.transliterationSize,
++        range = LyricsStyleSettings.SECONDARY_SIZE_RANGE,
++        step = 5,
++        valueText = percent,
++        onValueChange = { v -> onUpdate { it.copy(transliterationSize = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_translation_size),
++        description = stringResource(R.string.lyr_set_translation_size_desc),
++        value = settings.translationSize,
++        range = LyricsStyleSettings.SECONDARY_SIZE_RANGE,
++        step = 5,
++        valueText = percent,
++        onValueChange = { v -> onUpdate { it.copy(translationSize = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_bg_translation_size),
++        description = stringResource(R.string.lyr_set_bg_translation_size_desc),
++        value = settings.backgroundTranslationSize,
++        range = LyricsStyleSettings.SECONDARY_SIZE_RANGE,
++        step = 5,
++        valueText = percent,
++        onValueChange = { v -> onUpdate { it.copy(backgroundTranslationSize = v) } },
++    )
++
++    LyricsSettingsResetButton(
++        text = stringResource(R.string.lyr_set_reset_text_size),
++        onClick = {
++            onUpdate {
++                it.copy(
++                    lyricsSize = 100,
++                    transliterationSize = 100,
++                    translationSize = 100,
++                    backgroundTranslationSize = 100,
++                )
++            }
++        },
++    )
++}
++
++@Composable
++private fun TransliterationSection(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++) {
++    LyricsSettingsSection(stringResource(R.string.lyr_set_section_transliteration))
++
++    LyricsSettingsToggle(
++        label = stringResource(R.string.lyr_set_attach_to_words),
++        description = stringResource(R.string.lyr_set_attach_to_words_desc),
++        checked = settings.attachToWords,
++        onCheckedChange = { v -> onUpdate { it.copy(attachToWords = v) } },
++    )
++
++    LyricsSettingsChips(
++        label = stringResource(R.string.lyr_set_translit_position),
++        description = stringResource(R.string.lyr_set_translit_position_desc),
++        options = TransliterationPosition.entries,
++        selected = settings.transliterationPosition,
++        optionLabel = {
++            stringResource(
++                if (it == TransliterationPosition.Top) R.string.lyr_set_position_top else R.string.lyr_set_position_bottom,
++            )
++        },
++        onSelect = { v -> onUpdate { it.copy(transliterationPosition = v) } },
++    )
++}
++
++@Composable
++private fun BlurAndOpacitySection(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++) {
++    LyricsSettingsSection(stringResource(R.string.lyr_set_section_blur_opacity))
++    val off = stringResource(R.string.lyr_set_off)
++
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_unsung_opacity),
++        description = stringResource(R.string.lyr_set_unsung_opacity_desc),
++        value = settings.unsungOpacity,
++        range = LyricsStyleSettings.UNSUNG_RANGE,
++        step = 5,
++        valueText = { "$it%" },
++        onValueChange = { v -> onUpdate { it.copy(unsungOpacity = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_blur),
++        description = stringResource(R.string.lyr_set_blur_desc),
++        value = settings.blur,
++        range = LyricsStyleSettings.BLUR_RANGE,
++        step = 10,
++        valueText = { if (it == 0) off else "$it%" },
++        onValueChange = { v -> onUpdate { it.copy(blur = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_move_duration),
++        description = stringResource(R.string.lyr_set_move_duration_desc),
++        value = settings.moveDurationMs,
++        range = LyricsStyleSettings.MOVE_RANGE,
++        step = 50,
++        valueText = { String.format(java.util.Locale.US, "%.2f s", it / 1000f) },
++        onValueChange = { v -> onUpdate { it.copy(moveDurationMs = v) } },
++    )
++    LyricsSettingsSlider(
++        label = stringResource(R.string.lyr_set_current_position),
++        description = stringResource(R.string.lyr_set_current_position_desc),
++        value = settings.currentLinePosition,
++        range = LyricsStyleSettings.POSITION_RANGE,
++        step = 5,
++        valueText = { "$it%" },
++        onValueChange = { v -> onUpdate { it.copy(currentLinePosition = v) } },
++    )
++}
++
++@Composable
++private fun JiggleSection(
++    settings: LyricsStyleSettings,
++    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
++) {
++    LyricsSettingsSection(stringResource(R.string.lyr_set_section_jiggle))
++
++    LyricsSettingsToggle(
++        label = stringResource(R.string.lyr_set_jiggle),
++        description = stringResource(R.string.lyr_set_jiggle_desc),
++        checked = settings.jiggleEnabled,
++        onCheckedChange = { v -> onUpdate { it.copy(jiggleEnabled = v) } },
++    )
++
++    // The three jiggle sliders only matter while the effect is on.
++    if (settings.jiggleEnabled) {
++        LyricsSettingsSlider(
++            label = stringResource(R.string.lyr_set_jiggle_strength),
++            description = stringResource(R.string.lyr_set_jiggle_strength_desc),
++            value = settings.jiggleStrength,
++            range = LyricsStyleSettings.JIGGLE_STRENGTH_RANGE,
++            step = 5,
++            valueText = { "$it%" },
++            onValueChange = { v -> onUpdate { it.copy(jiggleStrength = v) } },
++        )
++        LyricsSettingsSlider(
++            label = stringResource(R.string.lyr_set_jiggle_duration),
++            description = stringResource(R.string.lyr_set_jiggle_duration_desc),
++            value = settings.jiggleDurationMs,
++            range = LyricsStyleSettings.JIGGLE_DURATION_RANGE,
++            step = 100,
++            valueText = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
++            onValueChange = { v -> onUpdate { it.copy(jiggleDurationMs = v) } },
++        )
++        LyricsSettingsSlider(
++            label = stringResource(R.string.lyr_set_jiggle_delay),
++            description = stringResource(R.string.lyr_set_jiggle_delay_desc),
++            value = settings.jiggleDelayMs,
++            range = LyricsStyleSettings.JIGGLE_DELAY_RANGE,
++            step = 5,
++            valueText = { "$it ms" },
++            onValueChange = { v -> onUpdate { it.copy(jiggleDelayMs = v) } },
++        )
++    }
++}
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
+index 6d0a702..0349257 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/SpringPlacementModifier.kt
+@@ -2,6 +2,7 @@ package me.spica27.spicamusic.ui.widget
+ 
+ import androidx.compose.animation.core.CubicBezierEasing
+ import androidx.compose.animation.core.DeferredTargetAnimation
++import androidx.compose.animation.core.Easing
+ import androidx.compose.animation.core.FiniteAnimationSpec
+ import androidx.compose.animation.core.VectorConverter
+ import androidx.compose.animation.core.snap
+@@ -20,10 +21,51 @@ import androidx.compose.ui.unit.Constraints
+ import androidx.compose.ui.unit.IntOffset
+ import androidx.compose.ui.unit.IntSize
+ import androidx.compose.ui.unit.round
++import kotlin.math.PI
++import kotlin.math.cos
++import kotlin.math.exp
++import kotlin.math.ln
++import kotlin.math.sin
+ 
+ /** 歌词行位移曲线，先缓后快再减速。 */
+ internal val LyricLineMoveEasing = CubicBezierEasing(0.4f, 0.1f, 0f, 1f)
+ 
++/**
++ * Apple Music-style jiggle for lines below the current one: the line overshoots its new position
++ * and settles back like a damped spring.
++ *
++ * @param strength 10..100 (%). Sets how far the line overshoots: 100% overshoots by about 30% of the move.
++ * @param durationMillis time the line takes to settle.
++ */
++internal class JiggleSpec(
++    val strength: Int,
++    val durationMillis: Int,
++) {
++    /** Step response of an under-damped spring: starts and ends at rest, overshoots by `strength * 0.3%`. */
++    val easing: Easing =
++        run {
++            val overshoot = (strength / 100f * MAX_OVERSHOOT).coerceIn(0.01f, 0.6f)
++            // Decay rate fixed so the motion has died out at the end; the frequency follows from the overshoot.
++            val decay = DECAY
++            val omega = decay * PI.toFloat() / -ln(overshoot)
++            val k = decay / omega
++            Easing { t ->
++                if (t <= 0f) {
++                    0f
++                } else if (t >= 1f) {
++                    1f
++                } else {
++                    1f - exp(-decay * t) * (cos(omega * t) + k * sin(omega * t))
++                }
++            }
++        }
++
++    private companion object {
++        const val MAX_OVERSHOOT = 0.3f
++        const val DECAY = 6f
++    }
++}
++
+ /**
+  * 处理前瞻布局后的歌词行位移。
+  * 列表先立即更新滚动位置，各行再按时长和错峰延迟补间；手动滚动时直接贴合手指。
+@@ -34,6 +76,7 @@ private class LinePlacementModifierNode(
+     var isManualScrolling: Boolean,
+     var durationMillis: Int,
+     var delayMillis: Int,
++    var jiggle: JiggleSpec?,
+     var initialOffsetY: Int,
+ ) : Modifier.Node(),
+     ApproachLayoutModifierNode {
+@@ -81,6 +124,12 @@ private class LinePlacementModifierNode(
+     private fun animationSpec(): FiniteAnimationSpec<IntOffset> =
+         if (isManualScrolling) {
+             snap()
++        } else if (jiggle != null) {
++            tween(
++                durationMillis = jiggle!!.durationMillis,
++                delayMillis = delayMillis,
++                easing = jiggle!!.easing,
++            )
+         } else {
+             tween(
+                 durationMillis = durationMillis,
+@@ -116,12 +165,14 @@ private class LinePlacementModifierNode(
+         newIsManualScrolling: Boolean,
+         newDurationMillis: Int,
+         newDelayMillis: Int,
++        newJiggle: JiggleSpec?,
+         newInitialOffsetY: Int,
+     ) {
+         lookaheadScope = newScope
+         isManualScrolling = newIsManualScrolling
+         durationMillis = newDurationMillis
+         delayMillis = newDelayMillis
++        jiggle = newJiggle
+         initialOffsetY = newInitialOffsetY
+         if (itemKey != newKey) {
+             itemKey = newKey
+@@ -141,6 +192,7 @@ private data class LinePlacementNodeElement(
+     val isManualScrolling: Boolean,
+     val durationMillis: Int,
+     val delayMillis: Int,
++    val jiggle: JiggleSpec?,
+     val initialOffsetY: Int,
+ ) : ModifierNodeElement<LinePlacementModifierNode>() {
+     override fun update(node: LinePlacementModifierNode) {
+@@ -150,6 +202,7 @@ private data class LinePlacementNodeElement(
+             isManualScrolling,
+             durationMillis,
+             delayMillis,
++            jiggle,
+             initialOffsetY,
+         )
+     }
+@@ -161,6 +214,7 @@ private data class LinePlacementNodeElement(
+             isManualScrolling,
+             durationMillis,
+             delayMillis,
++            jiggle,
+             initialOffsetY,
+         )
+ }
+@@ -172,6 +226,7 @@ internal fun Modifier.linePlacement(
+     isManualScrolling: Boolean,
+     durationMillis: Int,
+     delayMillis: Int,
++    jiggle: JiggleSpec? = null,
+     initialOffsetY: Int = 0,
+ ): Modifier =
+     then(
+@@ -181,6 +236,7 @@ internal fun Modifier.linePlacement(
+             isManualScrolling = isManualScrolling,
+             durationMillis = durationMillis,
+             delayMillis = delayMillis,
++            jiggle = jiggle,
+             initialOffsetY = initialOffsetY,
+         ),
+     )
+diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
+index 25acac5..c4356a5 100644
+--- a/app/src/main/res/values-zh-rTW/strings.xml
++++ b/app/src/main/res/values-zh-rTW/strings.xml
+@@ -801,4 +801,60 @@
+   <string name="scanner_rule_split_artists_desc">把 A/B、A、B、A &amp; B 和 feat. 識別為多位藝人。標籤裡本來就是多個值的不受影響。修改後立即生效，無需重新掃描。</string>
+   <string name="scanner_rule_split_off">不拆分</string>
+   <string name="scanner_rule_split_on">拆分</string>
++  <string name="lyr_set_title">歌詞設定</string>
++  <string name="lyr_set_section_font">字型</string>
++  <string name="lyr_set_font_style">字型樣式</string>
++  <string name="lyr_set_font_style_desc">用於整個播放器。預設保持應用程式字型；系統使用裝置自帶字型</string>
++  <string name="lyr_set_lyrics_font">歌詞字型</string>
++  <string name="lyr_set_lyrics_font_desc">讓歌詞使用與播放器其他部分不同的字型</string>
++  <string name="lyr_set_font_same">與播放器相同</string>
++  <string name="lyr_set_font_default">預設</string>
++  <string name="lyr_set_font_system">系統</string>
++  <string name="lyr_set_font_serif">襯線</string>
++  <string name="lyr_set_font_mono">等寬</string>
++  <string name="lyr_set_font_cursive">手寫</string>
++  <string name="lyr_set_weight">歌詞字重</string>
++  <string name="lyr_set_weight_desc">歌詞行的粗細</string>
++  <string name="lyr_set_weight_regular">標準</string>
++  <string name="lyr_set_weight_medium">中等</string>
++  <string name="lyr_set_weight_semibold">半粗</string>
++  <string name="lyr_set_weight_bold">粗體</string>
++  <string name="lyr_set_weight_extra_bold">特粗</string>
++  <string name="lyr_set_reset_fonts">重設字型</string>
++  <string name="lyr_set_section_text_size">文字大小</string>
++  <string name="lyr_set_lyrics_size">歌詞大小</string>
++  <string name="lyr_set_lyrics_size_desc">主歌詞行</string>
++  <string name="lyr_set_transliteration_size">音譯大小</string>
++  <string name="lyr_set_transliteration_size_desc">羅馬拼音文字</string>
++  <string name="lyr_set_translation_size">翻譯大小</string>
++  <string name="lyr_set_translation_size_desc">翻譯行</string>
++  <string name="lyr_set_bg_translation_size">伴唱翻譯大小</string>
++  <string name="lyr_set_bg_translation_size_desc">伴唱聲部下方的翻譯</string>
++  <string name="lyr_set_reset_text_size">重設文字大小</string>
++  <string name="lyr_set_section_transliteration">音譯</string>
++  <string name="lyr_set_attach_to_words">附著到單字</string>
++  <string name="lyr_set_attach_to_words_desc">歌詞支援時，每個單字顯示各自的羅馬拼音</string>
++  <string name="lyr_set_translit_position">音譯位置</string>
++  <string name="lyr_set_translit_position_desc">位於歌詞文字的頂部或底部</string>
++  <string name="lyr_set_position_top">頂部</string>
++  <string name="lyr_set_position_bottom">底部</string>
++  <string name="lyr_set_section_blur_opacity">歌詞模糊與透明度</string>
++  <string name="lyr_set_unsung_opacity">未唱文字透明度</string>
++  <string name="lyr_set_unsung_opacity_desc">一行中尚未唱到的部分，以及還未到來的歌詞行</string>
++  <string name="lyr_set_blur">模糊</string>
++  <string name="lyr_set_blur_desc">目前行以外的歌詞行的模糊程度</string>
++  <string name="lyr_set_off">關閉</string>
++  <string name="lyr_set_move_duration">移動到目前行</string>
++  <string name="lyr_set_move_duration_desc">歌詞捲動到正在演唱的行所需的時間</string>
++  <string name="lyr_set_current_position">目前歌詞位置</string>
++  <string name="lyr_set_current_position_desc">正在播放的行在螢幕上的位置</string>
++  <string name="lyr_set_section_jiggle">彈跳</string>
++  <string name="lyr_set_jiggle">彈跳效果</string>
++  <string name="lyr_set_jiggle_desc">目前行下方的歌詞行會像 Apple Music 一樣彈入位置</string>
++  <string name="lyr_set_jiggle_strength">彈跳強度</string>
++  <string name="lyr_set_jiggle_strength_desc">歌詞行彈跳的幅度，每次換行都相同</string>
++  <string name="lyr_set_jiggle_duration">彈跳時長</string>
++  <string name="lyr_set_jiggle_duration_desc">每一行穩定下來所需的時間</string>
++  <string name="lyr_set_jiggle_delay">行間延遲</string>
++  <string name="lyr_set_jiggle_delay_desc">每一行在上一行之後等待的時間</string>
+ </resources>
+diff --git a/app/src/main/res/values-zh/strings.xml b/app/src/main/res/values-zh/strings.xml
+index 5bb3586..cb105c8 100644
+--- a/app/src/main/res/values-zh/strings.xml
++++ b/app/src/main/res/values-zh/strings.xml
+@@ -802,4 +802,60 @@
+   <string name="scanner_rule_split_artists_desc">把 A/B、A、B、A &amp; B 和 feat. 识别为多位艺人。标签里本来就是多个值的不受影响。修改后立即生效，无需重新扫描。</string>
+   <string name="scanner_rule_split_off">不拆分</string>
+   <string name="scanner_rule_split_on">拆分</string>
++  <string name="lyr_set_title">歌词设置</string>
++  <string name="lyr_set_section_font">字体</string>
++  <string name="lyr_set_font_style">字体样式</string>
++  <string name="lyr_set_font_style_desc">用于整个播放器。默认保持应用字体；系统使用设备自带字体</string>
++  <string name="lyr_set_lyrics_font">歌词字体</string>
++  <string name="lyr_set_lyrics_font_desc">让歌词使用与播放器其他部分不同的字体</string>
++  <string name="lyr_set_font_same">与播放器相同</string>
++  <string name="lyr_set_font_default">默认</string>
++  <string name="lyr_set_font_system">系统</string>
++  <string name="lyr_set_font_serif">衬线</string>
++  <string name="lyr_set_font_mono">等宽</string>
++  <string name="lyr_set_font_cursive">手写</string>
++  <string name="lyr_set_weight">歌词字重</string>
++  <string name="lyr_set_weight_desc">歌词行的粗细</string>
++  <string name="lyr_set_weight_regular">常规</string>
++  <string name="lyr_set_weight_medium">中等</string>
++  <string name="lyr_set_weight_semibold">半粗</string>
++  <string name="lyr_set_weight_bold">粗体</string>
++  <string name="lyr_set_weight_extra_bold">特粗</string>
++  <string name="lyr_set_reset_fonts">重置字体</string>
++  <string name="lyr_set_section_text_size">文字大小</string>
++  <string name="lyr_set_lyrics_size">歌词大小</string>
++  <string name="lyr_set_lyrics_size_desc">主歌词行</string>
++  <string name="lyr_set_transliteration_size">音译大小</string>
++  <string name="lyr_set_transliteration_size_desc">罗马音文字</string>
++  <string name="lyr_set_translation_size">翻译大小</string>
++  <string name="lyr_set_translation_size_desc">翻译行</string>
++  <string name="lyr_set_bg_translation_size">伴唱翻译大小</string>
++  <string name="lyr_set_bg_translation_size_desc">伴唱声部下方的翻译</string>
++  <string name="lyr_set_reset_text_size">重置文字大小</string>
++  <string name="lyr_set_section_transliteration">音译</string>
++  <string name="lyr_set_attach_to_words">附着到单词</string>
++  <string name="lyr_set_attach_to_words_desc">歌词支持时，每个单词显示各自的罗马音</string>
++  <string name="lyr_set_translit_position">音译位置</string>
++  <string name="lyr_set_translit_position_desc">位于歌词文字的顶部或底部</string>
++  <string name="lyr_set_position_top">顶部</string>
++  <string name="lyr_set_position_bottom">底部</string>
++  <string name="lyr_set_section_blur_opacity">歌词模糊与透明度</string>
++  <string name="lyr_set_unsung_opacity">未唱文字透明度</string>
++  <string name="lyr_set_unsung_opacity_desc">一行中尚未唱到的部分，以及还未到来的歌词行</string>
++  <string name="lyr_set_blur">模糊</string>
++  <string name="lyr_set_blur_desc">当前行以外的歌词行的模糊程度</string>
++  <string name="lyr_set_off">关闭</string>
++  <string name="lyr_set_move_duration">移动到当前行</string>
++  <string name="lyr_set_move_duration_desc">歌词滚动到正在演唱的行所需的时间</string>
++  <string name="lyr_set_current_position">当前歌词位置</string>
++  <string name="lyr_set_current_position_desc">正在播放的行在屏幕上的位置</string>
++  <string name="lyr_set_section_jiggle">弹跳</string>
++  <string name="lyr_set_jiggle">弹跳效果</string>
++  <string name="lyr_set_jiggle_desc">当前行下方的歌词行会像 Apple Music 一样弹入位置</string>
++  <string name="lyr_set_jiggle_strength">弹跳强度</string>
++  <string name="lyr_set_jiggle_strength_desc">歌词行弹跳的幅度，每次换行都相同</string>
++  <string name="lyr_set_jiggle_duration">弹跳时长</string>
++  <string name="lyr_set_jiggle_duration_desc">每一行稳定下来所需的时间</string>
++  <string name="lyr_set_jiggle_delay">行间延迟</string>
++  <string name="lyr_set_jiggle_delay_desc">每一行在上一行之后等待的时间</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 8a5f2ee..81fc7e9 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -802,4 +802,60 @@
+   <string name="scanner_rule_split_artists_desc">Treat A/B, A、B, A &amp; B and feat. as separate artists. Tags that already hold several values are not affected. Applies right away without rescanning.</string>
+   <string name="scanner_rule_split_off">Keep as is</string>
+   <string name="scanner_rule_split_on">Split</string>
++  <string name="lyr_set_title">Lyrics settings</string>
++  <string name="lyr_set_section_font">Font</string>
++  <string name="lyr_set_font_style">Font style</string>
++  <string name="lyr_set_font_style_desc">Used across the whole player. Default keeps the app font; System uses your device’s own font</string>
++  <string name="lyr_set_lyrics_font">Lyrics font</string>
++  <string name="lyr_set_lyrics_font_desc">Give the lyrics a different font from the rest of the player</string>
++  <string name="lyr_set_font_same">Same as player</string>
++  <string name="lyr_set_font_default">Default</string>
++  <string name="lyr_set_font_system">System</string>
++  <string name="lyr_set_font_serif">Serif</string>
++  <string name="lyr_set_font_mono">Monospace</string>
++  <string name="lyr_set_font_cursive">Cursive</string>
++  <string name="lyr_set_weight">Lyrics weight</string>
++  <string name="lyr_set_weight_desc">How bold the lyric lines are</string>
++  <string name="lyr_set_weight_regular">Regular</string>
++  <string name="lyr_set_weight_medium">Medium</string>
++  <string name="lyr_set_weight_semibold">Semibold</string>
++  <string name="lyr_set_weight_bold">Bold</string>
++  <string name="lyr_set_weight_extra_bold">Extra bold</string>
++  <string name="lyr_set_reset_fonts">Reset fonts</string>
++  <string name="lyr_set_section_text_size">Text size</string>
++  <string name="lyr_set_lyrics_size">Lyrics size</string>
++  <string name="lyr_set_lyrics_size_desc">The main lyric lines</string>
++  <string name="lyr_set_transliteration_size">Transliteration size</string>
++  <string name="lyr_set_transliteration_size_desc">Romanized text</string>
++  <string name="lyr_set_translation_size">Translation size</string>
++  <string name="lyr_set_translation_size_desc">Translated lines</string>
++  <string name="lyr_set_bg_translation_size">Background translation size</string>
++  <string name="lyr_set_bg_translation_size_desc">Translation under background vocals</string>
++  <string name="lyr_set_reset_text_size">Reset text size</string>
++  <string name="lyr_set_section_transliteration">Transliteration</string>
++  <string name="lyr_set_attach_to_words">Attach to words</string>
++  <string name="lyr_set_attach_to_words_desc">Each word gets its own romanization, when the lyrics allow it</string>
++  <string name="lyr_set_translit_position">Transliteration position</string>
++  <string name="lyr_set_translit_position_desc">Top or bottom of the lyric words</string>
++  <string name="lyr_set_position_top">Top</string>
++  <string name="lyr_set_position_bottom">Bottom</string>
++  <string name="lyr_set_section_blur_opacity">Lyrics blur and opacity</string>
++  <string name="lyr_set_unsung_opacity">Unsung text opacity</string>
++  <string name="lyr_set_unsung_opacity_desc">The part of a line that has not been sung yet, and the lines still to come</string>
++  <string name="lyr_set_blur">Blur</string>
++  <string name="lyr_set_blur_desc">How much the lines other than the current one are blurred</string>
++  <string name="lyr_set_off">Off</string>
++  <string name="lyr_set_move_duration">Move to current line</string>
++  <string name="lyr_set_move_duration_desc">How long the lyrics take to scroll to the line being sung</string>
++  <string name="lyr_set_current_position">Current lyric position</string>
++  <string name="lyr_set_current_position_desc">Where the playing line sits on screen</string>
++  <string name="lyr_set_section_jiggle">Jiggle</string>
++  <string name="lyr_set_jiggle">Jiggle effect</string>
++  <string name="lyr_set_jiggle_desc">Lines below the current one spring into place, like Apple Music</string>
++  <string name="lyr_set_jiggle_strength">Jiggle strength</string>
++  <string name="lyr_set_jiggle_strength_desc">How far the lines bounce, the same for every line change</string>
++  <string name="lyr_set_jiggle_duration">Jiggle duration</string>
++  <string name="lyr_set_jiggle_duration_desc">How long each line takes to settle</string>
++  <string name="lyr_set_jiggle_delay">Delay between lines</string>
++  <string name="lyr_set_jiggle_delay_desc">How long each line waits after the one above it</string>
+ </resources>
+diff --git a/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/LyricsStyleSettings.kt b/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/LyricsStyleSettings.kt
+new file mode 100644
+index 0000000..ea1e27c
+--- /dev/null
++++ b/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/LyricsStyleSettings.kt
+@@ -0,0 +1,80 @@
++package me.spica27.spicamusic.core.preferences
++
++/** Where the transliteration (romanized text) sits relative to the lyric words. */
++enum class TransliterationPosition(
++    val value: String,
++) {
++    Top("top"),
++    Bottom("bottom"),
++    ;
++
++    companion object {
++        fun fromString(value: String?): TransliterationPosition = entries.firstOrNull { it.value == value } ?: Bottom
++    }
++}
++
++/**
++ * Every user-adjustable lyrics option, with the defaults and ranges of the reference lyrics window.
++ * All percentages are plain Ints (100 = 100%).
++ */
++data class LyricsStyleSettings(
++    // ---- Font ----
++    /** Font for the whole player: "default" or "system". */
++    val fontStyle: String = "default",
++    /** Font for the lyrics only: "same" follows [fontStyle]. */
++    val lyricsFont: String = "same",
++    /** 400 Regular .. 800 Extra bold. */
++    val lyricsWeight: Int = DEFAULT_WEIGHT,
++    // ---- Text size (percent) ----
++    val lyricsSize: Int = 100,
++    val transliterationSize: Int = 100,
++    val translationSize: Int = 100,
++    val backgroundTranslationSize: Int = 100,
++    // ---- Transliteration ----
++    val attachToWords: Boolean = true,
++    val transliterationPosition: TransliterationPosition = TransliterationPosition.Bottom,
++    // ---- Blur and opacity (percent) ----
++    val unsungOpacity: Int = 50,
++    val blur: Int = 100,
++    // ---- Motion ----
++    /** Time the lyrics take to scroll to the current line, in ms. */
++    val moveDurationMs: Int = 600,
++    /** Where the playing line sits on screen, percent of the height (5..70). */
++    val currentLinePosition: Int = 40,
++    // ---- Jiggle ----
++    val jiggleEnabled: Boolean = true,
++    val jiggleStrength: Int = 50,
++    val jiggleDurationMs: Int = 1200,
++    val jiggleDelayMs: Int = 45,
++) {
++    /** Returns a copy with every value forced into its allowed range. */
++    fun sanitized(): LyricsStyleSettings =
++        copy(
++            lyricsWeight = (lyricsWeight / 100 * 100).coerceIn(WEIGHT_RANGE),
++            lyricsSize = lyricsSize.coerceIn(LYRICS_SIZE_RANGE),
++            transliterationSize = transliterationSize.coerceIn(SECONDARY_SIZE_RANGE),
++            translationSize = translationSize.coerceIn(SECONDARY_SIZE_RANGE),
++            backgroundTranslationSize = backgroundTranslationSize.coerceIn(SECONDARY_SIZE_RANGE),
++            unsungOpacity = unsungOpacity.coerceIn(UNSUNG_RANGE),
++            blur = blur.coerceIn(BLUR_RANGE),
++            moveDurationMs = moveDurationMs.coerceIn(MOVE_RANGE),
++            currentLinePosition = currentLinePosition.coerceIn(POSITION_RANGE),
++            jiggleStrength = jiggleStrength.coerceIn(JIGGLE_STRENGTH_RANGE),
++            jiggleDurationMs = jiggleDurationMs.coerceIn(JIGGLE_DURATION_RANGE),
++            jiggleDelayMs = jiggleDelayMs.coerceIn(JIGGLE_DELAY_RANGE),
++        )
++
++    companion object {
++        const val DEFAULT_WEIGHT = 700
++        val WEIGHT_RANGE = 400..800
++        val LYRICS_SIZE_RANGE = 70..140
++        val SECONDARY_SIZE_RANGE = 60..200
++        val UNSUNG_RANGE = 10..100
++        val BLUR_RANGE = 0..200
++        val MOVE_RANGE = 200..1500
++        val POSITION_RANGE = 5..70
++        val JIGGLE_STRENGTH_RANGE = 10..100
++        val JIGGLE_DURATION_RANGE = 500..2500
++        val JIGGLE_DELAY_RANGE = 0..150
++    }
++}
+diff --git a/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/PreferencesManager.kt b/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/PreferencesManager.kt
+index 3f1ab1c..5c0e8b3 100644
+--- a/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/PreferencesManager.kt
++++ b/core-preferences/src/main/java/me/spica27/spicamusic/core/preferences/PreferencesManager.kt
+@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
+ import androidx.datastore.preferences.core.Preferences
+ import androidx.datastore.preferences.core.booleanPreferencesKey
+ import androidx.datastore.preferences.core.edit
++import androidx.datastore.preferences.core.intPreferencesKey
+ import androidx.datastore.preferences.core.stringPreferencesKey
+ import androidx.datastore.preferences.preferencesDataStore
+ import kotlinx.coroutines.flow.Flow
+@@ -38,6 +39,101 @@ class PreferencesManager(
+ 
+         // 是否把 "A/B"、"A、B"、"A & B" 等单个艺人字符串拆成多位艺人（默认关闭）
+         val ARTIST_SPLIT_ENABLED = booleanPreferencesKey("artist_split_enabled")
++
++        // ---- 歌词样式（Lyrics style）----
++        val LYRIC_FONT_STYLE = stringPreferencesKey("lyric_font_style")
++        val LYRIC_FONT = stringPreferencesKey("lyric_font")
++        val LYRIC_WEIGHT = intPreferencesKey("lyric_weight")
++        val LYRIC_SIZE = intPreferencesKey("lyric_size")
++        val LYRIC_TRANSLITERATION_SIZE = intPreferencesKey("lyric_transliteration_size")
++        val LYRIC_TRANSLATION_SIZE = intPreferencesKey("lyric_translation_size")
++        val LYRIC_BG_TRANSLATION_SIZE = intPreferencesKey("lyric_bg_translation_size")
++        val LYRIC_ATTACH_TO_WORDS = booleanPreferencesKey("lyric_attach_to_words")
++        val LYRIC_TRANSLITERATION_POSITION = stringPreferencesKey("lyric_transliteration_position")
++        val LYRIC_UNSUNG_OPACITY = intPreferencesKey("lyric_unsung_opacity")
++        val LYRIC_BLUR = intPreferencesKey("lyric_blur")
++        val LYRIC_MOVE_DURATION_MS = intPreferencesKey("lyric_move_duration_ms")
++        val LYRIC_CURRENT_POSITION = intPreferencesKey("lyric_current_position")
++        val LYRIC_JIGGLE_ENABLED = booleanPreferencesKey("lyric_jiggle_enabled")
++        val LYRIC_JIGGLE_STRENGTH = intPreferencesKey("lyric_jiggle_strength")
++        val LYRIC_JIGGLE_DURATION_MS = intPreferencesKey("lyric_jiggle_duration_ms")
++        val LYRIC_JIGGLE_DELAY_MS = intPreferencesKey("lyric_jiggle_delay_ms")
++    }
++
++
++    /** 歌词样式：任何一项变化都会发出完整、已校正的设置对象。 */
++    val lyricsStyle: Flow<LyricsStyleSettings> =
++        context.dataStore.data
++            .map { p ->
++                val d = LyricsStyleSettings()
++                LyricsStyleSettings(
++                    fontStyle = p[Keys.LYRIC_FONT_STYLE] ?: d.fontStyle,
++                    lyricsFont = p[Keys.LYRIC_FONT] ?: d.lyricsFont,
++                    lyricsWeight = p[Keys.LYRIC_WEIGHT] ?: d.lyricsWeight,
++                    lyricsSize = p[Keys.LYRIC_SIZE] ?: d.lyricsSize,
++                    transliterationSize = p[Keys.LYRIC_TRANSLITERATION_SIZE] ?: d.transliterationSize,
++                    translationSize = p[Keys.LYRIC_TRANSLATION_SIZE] ?: d.translationSize,
++                    backgroundTranslationSize = p[Keys.LYRIC_BG_TRANSLATION_SIZE] ?: d.backgroundTranslationSize,
++                    attachToWords = p[Keys.LYRIC_ATTACH_TO_WORDS] ?: d.attachToWords,
++                    transliterationPosition =
++                        p[Keys.LYRIC_TRANSLITERATION_POSITION]
++                            ?.let(TransliterationPosition::fromString) ?: d.transliterationPosition,
++                    unsungOpacity = p[Keys.LYRIC_UNSUNG_OPACITY] ?: d.unsungOpacity,
++                    blur = p[Keys.LYRIC_BLUR] ?: d.blur,
++                    moveDurationMs = p[Keys.LYRIC_MOVE_DURATION_MS] ?: d.moveDurationMs,
++                    currentLinePosition = p[Keys.LYRIC_CURRENT_POSITION] ?: d.currentLinePosition,
++                    jiggleEnabled = p[Keys.LYRIC_JIGGLE_ENABLED] ?: d.jiggleEnabled,
++                    jiggleStrength = p[Keys.LYRIC_JIGGLE_STRENGTH] ?: d.jiggleStrength,
++                    jiggleDurationMs = p[Keys.LYRIC_JIGGLE_DURATION_MS] ?: d.jiggleDurationMs,
++                    jiggleDelayMs = p[Keys.LYRIC_JIGGLE_DELAY_MS] ?: d.jiggleDelayMs,
++                ).sanitized()
++            }.distinctUntilChanged()
++
++    /** 读取当前歌词样式，套用 [transform] 后一次性写回所有键。 */
++    suspend fun updateLyricsStyle(transform: (LyricsStyleSettings) -> LyricsStyleSettings) {
++        context.dataStore.edit { p ->
++            val d = LyricsStyleSettings()
++            val current =
++                LyricsStyleSettings(
++                    fontStyle = p[Keys.LYRIC_FONT_STYLE] ?: d.fontStyle,
++                    lyricsFont = p[Keys.LYRIC_FONT] ?: d.lyricsFont,
++                    lyricsWeight = p[Keys.LYRIC_WEIGHT] ?: d.lyricsWeight,
++                    lyricsSize = p[Keys.LYRIC_SIZE] ?: d.lyricsSize,
++                    transliterationSize = p[Keys.LYRIC_TRANSLITERATION_SIZE] ?: d.transliterationSize,
++                    translationSize = p[Keys.LYRIC_TRANSLATION_SIZE] ?: d.translationSize,
++                    backgroundTranslationSize = p[Keys.LYRIC_BG_TRANSLATION_SIZE] ?: d.backgroundTranslationSize,
++                    attachToWords = p[Keys.LYRIC_ATTACH_TO_WORDS] ?: d.attachToWords,
++                    transliterationPosition =
++                        p[Keys.LYRIC_TRANSLITERATION_POSITION]
++                            ?.let(TransliterationPosition::fromString) ?: d.transliterationPosition,
++                    unsungOpacity = p[Keys.LYRIC_UNSUNG_OPACITY] ?: d.unsungOpacity,
++                    blur = p[Keys.LYRIC_BLUR] ?: d.blur,
++                    moveDurationMs = p[Keys.LYRIC_MOVE_DURATION_MS] ?: d.moveDurationMs,
++                    currentLinePosition = p[Keys.LYRIC_CURRENT_POSITION] ?: d.currentLinePosition,
++                    jiggleEnabled = p[Keys.LYRIC_JIGGLE_ENABLED] ?: d.jiggleEnabled,
++                    jiggleStrength = p[Keys.LYRIC_JIGGLE_STRENGTH] ?: d.jiggleStrength,
++                    jiggleDurationMs = p[Keys.LYRIC_JIGGLE_DURATION_MS] ?: d.jiggleDurationMs,
++                    jiggleDelayMs = p[Keys.LYRIC_JIGGLE_DELAY_MS] ?: d.jiggleDelayMs,
++                )
++            val n = transform(current).sanitized()
++            p[Keys.LYRIC_FONT_STYLE] = n.fontStyle
++            p[Keys.LYRIC_FONT] = n.lyricsFont
++            p[Keys.LYRIC_WEIGHT] = n.lyricsWeight
++            p[Keys.LYRIC_SIZE] = n.lyricsSize
++            p[Keys.LYRIC_TRANSLITERATION_SIZE] = n.transliterationSize
++            p[Keys.LYRIC_TRANSLATION_SIZE] = n.translationSize
++            p[Keys.LYRIC_BG_TRANSLATION_SIZE] = n.backgroundTranslationSize
++            p[Keys.LYRIC_ATTACH_TO_WORDS] = n.attachToWords
++            p[Keys.LYRIC_TRANSLITERATION_POSITION] = n.transliterationPosition.value
++            p[Keys.LYRIC_UNSUNG_OPACITY] = n.unsungOpacity
++            p[Keys.LYRIC_BLUR] = n.blur
++            p[Keys.LYRIC_MOVE_DURATION_MS] = n.moveDurationMs
++            p[Keys.LYRIC_CURRENT_POSITION] = n.currentLinePosition
++            p[Keys.LYRIC_JIGGLE_ENABLED] = n.jiggleEnabled
++            p[Keys.LYRIC_JIGGLE_STRENGTH] = n.jiggleStrength
++            p[Keys.LYRIC_JIGGLE_DURATION_MS] = n.jiggleDurationMs
++            p[Keys.LYRIC_JIGGLE_DELAY_MS] = n.jiggleDelayMs
++        }
+     }
+ 
+     fun getBoolean(
+diff --git a/feature-settings-domain/src/main/java/me/spica27/spicamusic/feature/settings/domain/SettingsUseCases.kt b/feature-settings-domain/src/main/java/me/spica27/spicamusic/feature/settings/domain/SettingsUseCases.kt
+index 12790df..fc576ff 100644
+--- a/feature-settings-domain/src/main/java/me/spica27/spicamusic/feature/settings/domain/SettingsUseCases.kt
++++ b/feature-settings-domain/src/main/java/me/spica27/spicamusic/feature/settings/domain/SettingsUseCases.kt
+@@ -2,6 +2,7 @@ package me.spica27.spicamusic.feature.settings.domain
+ 
+ import androidx.datastore.preferences.core.Preferences
+ import kotlinx.coroutines.flow.Flow
++import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
+ import me.spica27.spicamusic.core.preferences.PreferencesManager
+ 
+ class SettingsUseCases(
+@@ -70,4 +71,15 @@ class SettingsUseCases(
+     ) {
+         preferencesManager.setFloatList(key, value)
+     }
++
++    /** 歌词样式（字体、字号、模糊、跳动等）。 */
++    val lyricsStyle: Flow<LyricsStyleSettings> get() = preferencesManager.lyricsStyle
++
++    suspend fun updateLyricsStyle(transform: (LyricsStyleSettings) -> LyricsStyleSettings) {
++        preferencesManager.updateLyricsStyle(transform)
++    }
++
++    suspend fun resetLyricsStyle() {
++        preferencesManager.updateLyricsStyle { LyricsStyleSettings() }
++    }
+ }
