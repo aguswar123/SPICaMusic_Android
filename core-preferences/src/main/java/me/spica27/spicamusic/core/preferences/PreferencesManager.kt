@@ -24,6 +24,11 @@ class PreferencesManager(
         val THEME_COLOR_STYLE = stringPreferencesKey("theme_color_style")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val DYNAMIC_SPECTRUM_BACKGROUND = stringPreferencesKey("dynamic_spectrum_background")
+        // ---- Verse Flow 外观（Auto / Light / Dark、饱和度、鲜艳度、高亮色相）----
+        val VERSE_THEME_MODE = stringPreferencesKey("verse_theme_mode")
+        val VERSE_THEME_SATURATION = intPreferencesKey("verse_theme_saturation")
+        val VERSE_THEME_VIBRANCY = intPreferencesKey("verse_theme_vibrancy")
+        val VERSE_THEME_HUE = intPreferencesKey("verse_theme_hue")
         val DYNAMIC_COVER_TYPE = stringPreferencesKey("dynamic_cover_type")
         val PROGRESS_BAR_STYLE = stringPreferencesKey("progress_bar_style")
         val EQ_ENABLED = booleanPreferencesKey("eq_enabled")

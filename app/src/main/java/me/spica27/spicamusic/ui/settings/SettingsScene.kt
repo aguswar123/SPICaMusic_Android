@@ -44,11 +44,11 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Landscape
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LensBlur
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.MusicOff
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewAgenda
@@ -104,6 +104,10 @@ import me.spica27.spicamusic.ui.theme.ScaleEnterFrom
 import me.spica27.spicamusic.ui.theme.Shapes
 import me.spica27.spicamusic.ui.theme.Spacing
 import me.spica27.spicamusic.ui.theme.entrance
+import me.spica27.spicamusic.ui.widget.LyricsSettingsChips
+import me.spica27.spicamusic.ui.widget.LyricsSettingsResetButton
+import me.spica27.spicamusic.ui.widget.LyricsSettingsSlider
+import me.spica27.spicamusic.ui.widget.VerseThemeMode
 import me.spica27.spicamusic.ui.widget.clickHighlight
 import me.spica27.spicamusic.ui.widget.rememberIOSOverScrollEffect
 import org.koin.compose.viewmodel.koinViewModel
@@ -121,6 +125,10 @@ fun SettingsScreen() {
     val bottomBarLayout by viewModel.bottomBarLayout.collectAsStateWithLifecycle()
     val keepScreenOn by viewModel.keepScreenOn.collectAsStateWithLifecycle()
     val backgroundValue by viewModel.dynamicSpectrumBackground.collectAsStateWithLifecycle()
+    val verseMode by viewModel.verseThemeMode.collectAsStateWithLifecycle()
+    val verseSaturation by viewModel.verseSaturation.collectAsStateWithLifecycle()
+    val verseVibrancy by viewModel.verseVibrancy.collectAsStateWithLifecycle()
+    val verseHue by viewModel.verseHue.collectAsStateWithLifecycle()
     val coverTapValue by viewModel.dynamicCoverType.collectAsStateWithLifecycle()
     val progressWaveformValue by viewModel.progressBarStyle.collectAsStateWithLifecycle()
     val colorStyleValue by viewModel.themeColorStyle.collectAsStateWithLifecycle()
@@ -251,6 +259,29 @@ fun SettingsScreen() {
                         onExpandChange = { expandedRowKey = it },
                         onValueChange = viewModel::setDynamicSpectrumBackground,
                     )
+                    AnimatedVisibility(
+                        visible = backgroundValue == DynamicSpectrumBackground.VerseFlow.value,
+                        enter =
+                            expandVertically(
+                                animationSpec = tween(durationMillis = 220, easing = EaseOutEmphasized),
+                            ) + fadeIn(tween(durationMillis = 180)),
+                        exit =
+                            shrinkVertically(
+                                animationSpec = tween(durationMillis = 180, easing = EaseOutEmphasized),
+                            ) + fadeOut(tween(durationMillis = 140)),
+                    ) {
+                        VerseAppearanceControls(
+                            mode = verseMode,
+                            saturation = verseSaturation,
+                            vibrancy = verseVibrancy,
+                            hue = verseHue,
+                            onModeChange = viewModel::setVerseThemeMode,
+                            onSaturationChange = viewModel::setVerseSaturation,
+                            onVibrancyChange = viewModel::setVerseVibrancy,
+                            onHueChange = viewModel::setVerseHue,
+                            onReset = viewModel::resetVerseAppearance,
+                        )
+                    }
 //                        SettingsItemDivider()
 //                        InlineSelectRow(
 //                            rowKey = "cover_tap",
@@ -945,7 +976,11 @@ private fun rememberBackgroundOptions(): ImmutableList<SettingsOption> {
     val warpDesc = stringResource(R.string.bg_fluid_warp_desc)
     val blur = stringResource(R.string.bg_blur_cover)
     val blurDesc = stringResource(R.string.bg_blur_cover_desc)
+    val verse = stringResource(R.string.bg_verse_flow)
+    val verseDesc = stringResource(R.string.bg_verse_flow_desc)
     return remember(
+        verse,
+        verseDesc,
         off,
         offDesc,
         topGlow,
@@ -961,6 +996,12 @@ private fun rememberBackgroundOptions(): ImmutableList<SettingsOption> {
     ) {
         ImmutableList.copyOf(
             listOf(
+                SettingsOption(
+                    DynamicSpectrumBackground.VerseFlow.value,
+                    verse,
+                    verseDesc,
+                    Icons.Default.Palette,
+                ),
                 SettingsOption(
                     DynamicSpectrumBackground.FluidWarp.value,
                     warp,
@@ -1089,3 +1130,77 @@ private fun Density.mastheadCollapse(listState: LazyListState): Float =
     } else {
         (listState.firstVisibleItemScrollOffset / MastheadCollapseDistance.toPx()).coerceIn(0f, 1f)
     }
+
+
+/** Verse Flow 外观：Auto / Light / Dark，饱和度、鲜艳度、高亮色（与 HTML 的 Appearance 一致）。 */
+@Composable
+private fun VerseAppearanceControls(
+    mode: String,
+    saturation: Int,
+    vibrancy: Int,
+    hue: Int,
+    onModeChange: (String) -> Unit,
+    onSaturationChange: (Int) -> Unit,
+    onVibrancyChange: (Int) -> Unit,
+    onHueChange: (Int) -> Unit,
+    onReset: () -> Unit,
+) {
+    val auto = stringResource(R.string.verse_hue_auto)
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = SettingsRowContentInset,
+                    end = Spacing.Large,
+                    top = Spacing.ExtraSmall,
+                    bottom = Spacing.Small,
+                ),
+    ) {
+        LyricsSettingsChips(
+            label = stringResource(R.string.verse_mode),
+            description = stringResource(R.string.verse_mode_desc),
+            options = listOf(VerseThemeMode.AUTO, VerseThemeMode.LIGHT, VerseThemeMode.DARK),
+            selected = mode,
+            optionLabel = {
+                when (it) {
+                    VerseThemeMode.LIGHT -> stringResource(R.string.verse_mode_light)
+                    VerseThemeMode.DARK -> stringResource(R.string.verse_mode_dark)
+                    else -> stringResource(R.string.verse_mode_auto)
+                }
+            },
+            onSelect = onModeChange,
+        )
+        LyricsSettingsSlider(
+            label = stringResource(R.string.verse_saturation),
+            description = stringResource(R.string.verse_saturation_desc),
+            value = saturation,
+            range = 0..200,
+            step = 5,
+            valueText = { "$it%" },
+            onValueChange = onSaturationChange,
+        )
+        LyricsSettingsSlider(
+            label = stringResource(R.string.verse_vibrancy),
+            description = stringResource(R.string.verse_vibrancy_desc),
+            value = vibrancy,
+            range = 0..100,
+            step = 1,
+            valueText = { "$it%" },
+            onValueChange = onVibrancyChange,
+        )
+        LyricsSettingsSlider(
+            label = stringResource(R.string.verse_highlight),
+            description = stringResource(R.string.verse_highlight_desc),
+            value = hue,
+            range = -180..180,
+            step = 5,
+            valueText = { if (it == 0) auto else (if (it > 0) "+" else "") + it + "°" },
+            onValueChange = onHueChange,
+        )
+        LyricsSettingsResetButton(
+            text = stringResource(R.string.verse_reset),
+            onClick = onReset,
+        )
+    }
+}

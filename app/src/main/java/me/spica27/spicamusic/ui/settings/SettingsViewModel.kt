@@ -13,6 +13,7 @@ import me.spica27.spicamusic.common.entity.DynamicSpectrumBackground
 import me.spica27.spicamusic.common.entity.ProgressBarStyle
 import me.spica27.spicamusic.common.entity.ThemeColorStyle
 import me.spica27.spicamusic.feature.settings.domain.SettingsUseCases
+import me.spica27.spicamusic.ui.widget.VerseThemeMode
 
 /**
  * 设置页面 ViewModel
@@ -95,6 +96,55 @@ class SettingsViewModel(
     fun setDynamicSpectrumBackground(value: String) {
         viewModelScope.launch {
             settingsUseCases.setString(SettingsUseCases.Keys.DYNAMIC_SPECTRUM_BACKGROUND, value)
+        }
+    }
+
+    // ---- Verse Flow 外观 ----
+    val verseThemeMode =
+        settingsUseCases
+            .getString(SettingsUseCases.Keys.VERSE_THEME_MODE, VerseThemeMode.AUTO)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, VerseThemeMode.AUTO)
+
+    fun setVerseThemeMode(value: String) {
+        viewModelScope.launch { settingsUseCases.setString(SettingsUseCases.Keys.VERSE_THEME_MODE, value) }
+    }
+
+    /** 饱和度 0..200（%），默认 100 */
+    val verseSaturation =
+        settingsUseCases
+            .getInt(SettingsUseCases.Keys.VERSE_THEME_SATURATION, 100)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, 100)
+
+    fun setVerseSaturation(value: Int) {
+        viewModelScope.launch { settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_SATURATION, value.coerceIn(0, 200)) }
+    }
+
+    /** 鲜艳度 0..100（%），默认 50 */
+    val verseVibrancy =
+        settingsUseCases
+            .getInt(SettingsUseCases.Keys.VERSE_THEME_VIBRANCY, 50)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, 50)
+
+    fun setVerseVibrancy(value: Int) {
+        viewModelScope.launch { settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_VIBRANCY, value.coerceIn(0, 100)) }
+    }
+
+    /** 高亮色相偏移 -180..180°，0 = Auto */
+    val verseHue =
+        settingsUseCases
+            .getInt(SettingsUseCases.Keys.VERSE_THEME_HUE, 0)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    fun setVerseHue(value: Int) {
+        viewModelScope.launch { settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_HUE, value.coerceIn(-180, 180)) }
+    }
+
+    fun resetVerseAppearance() {
+        viewModelScope.launch {
+            settingsUseCases.setString(SettingsUseCases.Keys.VERSE_THEME_MODE, VerseThemeMode.AUTO)
+            settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_SATURATION, 100)
+            settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_VIBRANCY, 50)
+            settingsUseCases.setInt(SettingsUseCases.Keys.VERSE_THEME_HUE, 0)
         }
     }
 

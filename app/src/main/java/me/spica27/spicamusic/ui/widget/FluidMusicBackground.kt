@@ -81,6 +81,7 @@ fun FluidMusicBackground(
     val enable =
         remember(backgroundMode, enabled) {
             backgroundMode != DynamicSpectrumBackground.OFF &&
+                backgroundMode != DynamicSpectrumBackground.VerseFlow &&
                 backgroundMode != DynamicSpectrumBackground.BlurCover &&
                 enabled
         }
@@ -134,7 +135,10 @@ fun FluidMusicBackground(
             )
         }
 
-        DynamicSpectrumBackground.OFF ->
+        // Verse Flow 由播放器页面直接绘制（需要同时改变文字颜色），这里不重复绘制
+        DynamicSpectrumBackground.VerseFlow,
+        DynamicSpectrumBackground.OFF,
+        ->
             Box(modifier = modifier)
 
         DynamicSpectrumBackground.BlurCover -> {

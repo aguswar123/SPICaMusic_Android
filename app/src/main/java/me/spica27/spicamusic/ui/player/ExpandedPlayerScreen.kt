@@ -105,6 +105,7 @@ import me.spica27.spicamusic.App
 import me.spica27.spicamusic.R
 import me.spica27.spicamusic.artwork.artwork
 import me.spica27.spicamusic.common.entity.DynamicCoverType
+import me.spica27.spicamusic.common.entity.DynamicSpectrumBackground
 import me.spica27.spicamusic.common.entity.ProgressBarStyle
 import me.spica27.spicamusic.core.preferences.PreferencesManager
 import me.spica27.spicamusic.feature.library.domain.ArtistUseCases
@@ -122,7 +123,11 @@ import me.spica27.spicamusic.ui.theme.LocalReducedMotion
 import me.spica27.spicamusic.ui.theme.Shapes
 import me.spica27.spicamusic.ui.theme.Spacing
 import me.spica27.spicamusic.ui.widget.AudioCover
+import me.spica27.spicamusic.ui.settings.SettingsViewModel
 import me.spica27.spicamusic.ui.widget.FluidMusicBackground
+import me.spica27.spicamusic.ui.widget.VerseFlowBackground
+import me.spica27.spicamusic.ui.widget.VerseFlowThemeScope
+import me.spica27.spicamusic.ui.widget.rememberVerseTheme
 import me.spica27.spicamusic.ui.widget.ShowOnIdleContent
 import me.spica27.spicamusic.ui.widget.audio_seekbar.AudioDynamicWaveSlider
 import me.spica27.spicamusic.ui.widget.audio_seekbar.AudioWaveSlider
@@ -135,6 +140,7 @@ import me.spica27.spicamusic.ui.widget.rememberIOSOverScrollEffect
 import me.spica27.spicamusic.utils.Nav3Transitions
 import me.spica27.spicamusic.utils.rememberDominantColorFromUri
 import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 import timber.log.Timber
 import java.io.File
 import java.util.Locale
@@ -355,6 +361,22 @@ fun ExpandedPlayerScreen(
             uri = currentMediaItem?.mediaMetadata?.artworkUri,
             fallbackColor = MaterialTheme.colorScheme.primary,
         )
+    // Verse Flow 背景：与 HTML 播放器一致的渐变背景 + 同步改变文字颜色
+    val settingsViewModel: SettingsViewModel = koinViewModel()
+    val backgroundValue by settingsViewModel.dynamicSpectrumBackground.collectAsStateWithLifecycle()
+    val verseMode by settingsViewModel.verseThemeMode.collectAsStateWithLifecycle()
+    val verseSaturation by settingsViewModel.verseSaturation.collectAsStateWithLifecycle()
+    val verseVibrancy by settingsViewModel.verseVibrancy.collectAsStateWithLifecycle()
+    val verseHue by settingsViewModel.verseHue.collectAsStateWithLifecycle()
+    val isVerseFlow = backgroundValue == DynamicSpectrumBackground.VerseFlow.value
+    val verseTheme =
+        rememberVerseTheme(
+            coverUri = if (isVerseFlow) currentMediaItem?.mediaMetadata?.artworkUri else null,
+            mode = verseMode,
+            saturationPercent = verseSaturation,
+            vibrancyPercent = verseVibrancy,
+            hueShift = verseHue,
+        )
     val hazeState = rememberHazeState()
     val lyricsScrimAlpha =
         animateFloatAsState(
@@ -364,194 +386,223 @@ fun ExpandedPlayerScreen(
         )
     val lyricsScrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.14f)
 
-    Box(
-        modifier =
-            modifier
-                .graphicsLayer {
-                    alpha = progressProvider()
-                }.background(MaterialTheme.colorScheme.surface)
-                .fillMaxSize(),
-    ) {
-        // 仅在页面可见且应用在前台时启用动态背景。
-        FluidMusicBackground(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    // 队列顶栏在关闭玻璃时仍需采样动态背景，用于渐变模糊。
-                    .hazeSource(hazeState),
-            coverColor = coverColor,
-            isDarkMode = MaterialTheme.colorScheme.surface.luminance() < 0.5f,
-            coverUri = { currentMediaItem?.mediaMetadata?.artworkUri },
-            enabled = animationsEnabled && isAppInForeground,
-        )
-
-        // 歌词模式只压暗同一份动态背景，不创建第二个背景实例。
+    PlayerThemeScope(isVerseFlow = isVerseFlow, theme = verseTheme) {
         Box(
             modifier =
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = lyricsScrimAlpha.value }
-                    .background(lyricsScrimColor),
-        )
+                modifier
+                    .graphicsLayer {
+                        alpha = progressProvider()
+                    }.background(MaterialTheme.colorScheme.surface)
+                    .fillMaxSize(),
+        ) {
+            if (isVerseFlow) {
+                // 与 HTML 完全一致的渐变背景（歌词页额外显示漂移的 mesh）
+                VerseFlowBackground(
+                    theme = verseTheme,
+                    showMesh = playerSurface == PlayerSurface.Lyrics,
+                    meshAnimated = animationsEnabled && isAppInForeground,
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .hazeSource(hazeState),
+                )
+            } else {
+                // 仅在页面可见且应用在前台时启用动态背景。
+                FluidMusicBackground(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            // 队列顶栏在关闭玻璃时仍需采样动态背景，用于渐变模糊。
+                            .hazeSource(hazeState),
+                    coverColor = coverColor,
+                    isDarkMode = MaterialTheme.colorScheme.surface.luminance() < 0.5f,
+                    coverUri = { currentMediaItem?.mediaMetadata?.artworkUri },
+                    enabled = animationsEnabled && isAppInForeground,
+                )
 
-        // 播放器与全屏歌词是同一播放器容器中的两种前景模式，而非两个导航目的地。
-        AnimatedContent(
-            targetState = playerSurface,
-            modifier = Modifier.fillMaxSize(),
-            transitionSpec = {
-                Nav3Transitions.zoom()
-            },
-            contentKey = { it },
-            label = "playerSurface",
-        ) { surface ->
-            when (surface) {
-                PlayerSurface.Player -> {
-                    VerticalPager(
-                        modifier = Modifier.fillMaxSize(),
-                        state = pagerState,
-                        key = { page -> page },
-                        overscrollEffect = rememberIOSOverScrollEffect(orientation = Orientation.Vertical),
-                        flingBehavior =
-                            PagerDefaults.flingBehavior(
-                                state = pagerState,
-                                snapPositionalThreshold = .2f,
-                            ),
-                    ) { page ->
-                        if (page == DEFAULT_PAGE) {
-                            Column(
-                                modifier =
-                                    Modifier
-                                        .fillMaxSize()
-                                        .statusBarsPadding(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                dragHandle()
-                                ShowOnIdleContent(
-                                    modifier = Modifier.weight(1f),
-                                    visible = isPlayerPageRevealed,
-                                    delayMillis = 225,
-                                    enter = Nav3Transitions.expand().targetContentEnter,
+                // 歌词模式只压暗同一份动态背景，不创建第二个背景实例。
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = lyricsScrimAlpha.value }
+                            .background(lyricsScrimColor),
+                )
+            }
+
+            // 播放器与全屏歌词是同一播放器容器中的两种前景模式，而非两个导航目的地。
+            AnimatedContent(
+                targetState = playerSurface,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    Nav3Transitions.zoom()
+                },
+                contentKey = { it },
+                label = "playerSurface",
+            ) { surface ->
+                when (surface) {
+                    PlayerSurface.Player -> {
+                        VerticalPager(
+                            modifier = Modifier.fillMaxSize(),
+                            state = pagerState,
+                            key = { page -> page },
+                            overscrollEffect = rememberIOSOverScrollEffect(orientation = Orientation.Vertical),
+                            flingBehavior =
+                                PagerDefaults.flingBehavior(
+                                    state = pagerState,
+                                    snapPositionalThreshold = .2f,
+                                ),
+                        ) { page ->
+                            if (page == DEFAULT_PAGE) {
+                                Column(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxSize()
+                                            .statusBarsPadding(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
-                                    PlayerPage(
-                                        playerViewModel = viewModel,
-                                        hazeState = hazeState,
-                                        isSeekingState = isSeekingState,
-                                        currentMediaItem = { currentMediaItem },
-                                        audioQualityInfo = audioQualityInfo,
-                                        realPositionProvider = {
-                                            if (animationsEnabled) {
-                                                positionState.value.toFloat()
-                                            } else {
-                                                positionHolder.realPosition
-                                            }
-                                        },
-                                        seekPositionProvider = {
-                                            if (animationsEnabled) {
-                                                seekValueState.floatValue
-                                            } else {
-                                                positionHolder.seekPosition
-                                            }
-                                        },
-                                        duration = duration,
-                                        isPlaying = isPlaying,
-                                        isLike = songLikeState,
-                                        playMode = playMode,
-                                        onValueChange = {
-                                            isSeekingState = true
-                                            seekValueState.floatValue = it * duration
-                                            positionHolder.seekPosition = seekValueState.floatValue
-                                        },
-                                        onValueChangeFinished = {
-                                            viewModel.seekTo(seekValueState.floatValue.toLong())
-                                            isSeekingState = false
-                                        },
-                                        onPlayPauseClick = { viewModel.togglePlayPause() },
-                                        onPreviousClick = { viewModel.skipToPrevious() },
-                                        onNextClick = { viewModel.skipToNext() },
-                                        onPlayModeClick = { viewModel.togglePlayMode() },
-                                        onFavoriteClick = { viewModel.toggleLikeCurrentSong() },
-                                        onSleepTimerClick = { backStack.add(SleepTimerRoute) },
-                                        onArtistClick = { route -> backStack.add(route) },
-                                        onLyricsClick = { playerSurface = PlayerSurface.Lyrics },
-                                        sleepTimer = sleepTimer,
-                                        onPlaylistClick = {
+                                    dragHandle()
+                                    ShowOnIdleContent(
+                                        modifier = Modifier.weight(1f),
+                                        visible = isPlayerPageRevealed,
+                                        delayMillis = 225,
+                                        enter = Nav3Transitions.expand().targetContentEnter,
+                                    ) {
+                                        PlayerPage(
+                                            playerViewModel = viewModel,
+                                            hazeState = hazeState,
+                                            isSeekingState = isSeekingState,
+                                            currentMediaItem = { currentMediaItem },
+                                            audioQualityInfo = audioQualityInfo,
+                                            realPositionProvider = {
+                                                if (animationsEnabled) {
+                                                    positionState.value.toFloat()
+                                                } else {
+                                                    positionHolder.realPosition
+                                                }
+                                            },
+                                            seekPositionProvider = {
+                                                if (animationsEnabled) {
+                                                    seekValueState.floatValue
+                                                } else {
+                                                    positionHolder.seekPosition
+                                                }
+                                            },
+                                            duration = duration,
+                                            isPlaying = isPlaying,
+                                            isLike = songLikeState,
+                                            playMode = playMode,
+                                            onValueChange = {
+                                                isSeekingState = true
+                                                seekValueState.floatValue = it * duration
+                                                positionHolder.seekPosition = seekValueState.floatValue
+                                            },
+                                            onValueChangeFinished = {
+                                                viewModel.seekTo(seekValueState.floatValue.toLong())
+                                                isSeekingState = false
+                                            },
+                                            onPlayPauseClick = { viewModel.togglePlayPause() },
+                                            onPreviousClick = { viewModel.skipToPrevious() },
+                                            onNextClick = { viewModel.skipToNext() },
+                                            onPlayModeClick = { viewModel.togglePlayMode() },
+                                            onFavoriteClick = { viewModel.toggleLikeCurrentSong() },
+                                            onSleepTimerClick = { backStack.add(SleepTimerRoute) },
+                                            onArtistClick = { route -> backStack.add(route) },
+                                            onLyricsClick = { playerSurface = PlayerSurface.Lyrics },
+                                            sleepTimer = sleepTimer,
+                                            onPlaylistClick = {
+                                                coroutineScope.launch {
+                                                    pagerState.animateScrollToPage(
+                                                        QUEUE_PAGE,
+                                                        animationSpec =
+                                                            tween(
+                                                                durationMillis = 320,
+                                                                easing = EaseOutEmphasized,
+                                                            ),
+                                                    )
+                                                }
+                                            },
+                                            progressProvider = progressProvider,
+                                            isAppInForeground = isAppInForeground,
+                                            animationsEnabled = animationsEnabled,
+                                            amplitudeCache = amplitudeCache,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
+                            } else {
+                                ShowOnIdleContent(
+                                    true,
+                                    modifier = Modifier.fillMaxSize(),
+                                    delayMillis = 225,
+                                    enter = Nav3Transitions.slideUp().targetContentEnter,
+                                ) {
+                                    CurrPlaylistPage(
+                                        onNavigateBack = {
                                             coroutineScope.launch {
                                                 pagerState.animateScrollToPage(
-                                                    QUEUE_PAGE,
+                                                    DEFAULT_PAGE,
                                                     animationSpec =
                                                         tween(
-                                                            durationMillis = 320,
-                                                            easing = EaseOutEmphasized,
+                                                            durationMillis = 300,
+                                                            easing = EaseOutCubic,
                                                         ),
                                                 )
                                             }
                                         },
-                                        progressProvider = progressProvider,
-                                        isAppInForeground = isAppInForeground,
-                                        animationsEnabled = animationsEnabled,
-                                        amplitudeCache = amplitudeCache,
+                                        navigationIcon = Icons.Rounded.KeyboardArrowDown,
+                                        navigationContentDescription = stringResource(R.string.back_to_player),
+                                        chromeColor = MaterialTheme.colorScheme.surface,
+                                        contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Vertical),
                                         modifier = Modifier.fillMaxSize(),
+                                        hazeState = hazeState,
                                     )
                                 }
                             }
-                        } else {
-                            ShowOnIdleContent(
-                                true,
-                                modifier = Modifier.fillMaxSize(),
-                                delayMillis = 225,
-                                enter = Nav3Transitions.slideUp().targetContentEnter,
-                            ) {
-                                CurrPlaylistPage(
-                                    onNavigateBack = {
-                                        coroutineScope.launch {
-                                            pagerState.animateScrollToPage(
-                                                DEFAULT_PAGE,
-                                                animationSpec =
-                                                    tween(
-                                                        durationMillis = 300,
-                                                        easing = EaseOutCubic,
-                                                    ),
-                                            )
-                                        }
-                                    },
-                                    navigationIcon = Icons.Rounded.KeyboardArrowDown,
-                                    navigationContentDescription = stringResource(R.string.back_to_player),
-                                    chromeColor = MaterialTheme.colorScheme.surface,
-                                    contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Vertical),
-                                    modifier = Modifier.fillMaxSize(),
-                                    hazeState = hazeState,
-                                )
-                            }
                         }
                     }
-                }
 
-                PlayerSurface.Lyrics -> {
-                    FullscreenLyricsSurface(
-                        title =
-                            currentMediaItem
-                                ?.mediaMetadata
-                                ?.title
-                                ?.toString()
-                                ?: stringResource(R.string.unknown_song),
-                        artist =
-                            currentMediaItem
-                                ?.mediaMetadata
-                                ?.artist
-                                ?.toString()
-                                ?: stringResource(R.string.unknown_artist),
-                        artwork = currentMediaItem?.mediaMetadata?.artwork(),
-                        hazeState = hazeState,
-                        isPlaying = isPlaying,
-                        onBack = { playerSurface = PlayerSurface.Player },
-                        onPlayPauseClick = { viewModel.togglePlayPause() },
-                        onPreviousClick = { viewModel.skipToPrevious() },
-                        onNextClick = { viewModel.skipToNext() },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    PlayerSurface.Lyrics -> {
+                        FullscreenLyricsSurface(
+                            title =
+                                currentMediaItem
+                                    ?.mediaMetadata
+                                    ?.title
+                                    ?.toString()
+                                    ?: stringResource(R.string.unknown_song),
+                            artist =
+                                currentMediaItem
+                                    ?.mediaMetadata
+                                    ?.artist
+                                    ?.toString()
+                                    ?: stringResource(R.string.unknown_artist),
+                            artwork = currentMediaItem?.mediaMetadata?.artwork(),
+                            hazeState = hazeState,
+                            isPlaying = isPlaying,
+                            onBack = { playerSurface = PlayerSurface.Player },
+                            onPlayPauseClick = { viewModel.togglePlayPause() },
+                            onPreviousClick = { viewModel.skipToPrevious() },
+                            onNextClick = { viewModel.skipToNext() },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+/** Verse Flow 开启时，用 HTML 同款配色覆盖 Material 颜色（文字、图标、滑块都跟着变）。 */
+@Composable
+private fun PlayerThemeScope(
+    isVerseFlow: Boolean,
+    theme: me.spica27.spicamusic.ui.widget.VerseTheme,
+    content: @Composable () -> Unit,
+) {
+    if (isVerseFlow) {
+        VerseFlowThemeScope(theme = theme, content = content)
+    } else {
+        content()
     }
 }
 
