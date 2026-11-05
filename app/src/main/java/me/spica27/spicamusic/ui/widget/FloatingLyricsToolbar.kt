@@ -78,34 +78,19 @@ fun FloatingLyricsToolbar(
                         shrinkTowards = Alignment.End,
                     ),
         ) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // 偏移量调节栏
-                if (offsetEnabled) {
-                    OffsetAdjustBar(
-                        offsetMs = offsetMs,
-                        onOffsetChange = onOffsetChange,
-                    )
-                }
-
-                // 歌词设置（字体、字号、模糊、跳动等）
-                LyricsSettingsButton(
-                    onClick = {
-                        isExpanded = false
-                        onOpenLyricsSettings()
-                    },
-                )
-
-                // 切换歌词来源按钮（常驻：无内嵌/在线时用户仍可进入选择本地文件）
-                SwitchLyricsButton(
-                    onClick = {
-                        isExpanded = false
-                        onOpenLyricsSwitcher()
-                    },
-                )
-            }
+            LyricsToolbarMenuContent(
+                offsetEnabled = offsetEnabled,
+                offsetMs = offsetMs,
+                onOffsetChange = onOffsetChange,
+                onOpenLyricsSettings = {
+                    isExpanded = false
+                    onOpenLyricsSettings()
+                },
+                onOpenLyricsSwitcher = {
+                    isExpanded = false
+                    onOpenLyricsSwitcher()
+                },
+            )
         }
 
         // 主按钮（展开/收起）
@@ -120,6 +105,40 @@ fun FloatingLyricsToolbar(
                 modifier = Modifier.size(22.dp),
             )
         }
+    }
+}
+
+/**
+ * 工具栏展开后的内容：偏移量调节、歌词设置、切换歌词来源。
+ * 由浮动工具栏与歌词页顶栏共用。
+ */
+@Composable
+fun LyricsToolbarMenuContent(
+    offsetEnabled: Boolean,
+    offsetMs: Long,
+    onOffsetChange: (Long) -> Unit,
+    onOpenLyricsSettings: () -> Unit,
+    onOpenLyricsSwitcher: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // 偏移量调节栏
+        if (offsetEnabled) {
+            OffsetAdjustBar(
+                offsetMs = offsetMs,
+                onOffsetChange = onOffsetChange,
+            )
+        }
+
+        // 歌词设置（字体、字号、模糊、跳动等）
+        LyricsSettingsButton(onClick = onOpenLyricsSettings)
+
+        // 切换歌词来源按钮（常驻：无内嵌/在线时用户仍可进入选择本地文件）
+        SwitchLyricsButton(onClick = onOpenLyricsSwitcher)
     }
 }
 

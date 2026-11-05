@@ -128,6 +128,16 @@ import kotlin.math.roundToInt
 
 // ==================== 常量 ====================
 
+/**
+ * Left/right edge of the fullscreen lyrics text: clamp(16, 5.4% of the width, 26) dp.
+ * The lyrics header uses the same value so header and lyrics line up on both sides.
+ */
+@Composable
+fun rememberLyricsEdgePadding(): Dp {
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    return (widthDp * 0.054f).coerceIn(16f, 26f).dp
+}
+
 private object LyricUIConstants {
     const val EMPTY_WORD_PLACEHOLDER = " · · · "
 

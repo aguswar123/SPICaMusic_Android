@@ -577,9 +577,9 @@ fun ExpandedPlayerScreen(
                                     ?.toString()
                                     ?: stringResource(R.string.unknown_artist),
                             artwork = currentMediaItem?.mediaMetadata?.artwork(),
-                            hazeState = hazeState,
+                            isLike = songLikeState,
+                            onLikeClick = { viewModel.toggleLikeCurrentSong() },
                             isPlaying = isPlaying,
-                            onBack = { playerSurface = PlayerSurface.Player },
                             onPlayPauseClick = { viewModel.togglePlayPause() },
                             onPreviousClick = { viewModel.skipToPrevious() },
                             onNextClick = { viewModel.skipToNext() },
