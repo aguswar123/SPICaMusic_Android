@@ -1,14 +1,22 @@
 package me.spica27.spicamusic.ui.widget
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.StartOffsetType
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -68,6 +76,7 @@ import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TileMode
@@ -112,6 +121,7 @@ import me.spica27.spicamusic.core.preferences.TransliterationPosition
 import me.spica27.spicamusic.ui.theme.Shapes
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -183,11 +193,39 @@ private object LyricUIConstants {
     const val WORD_TRANSLITERATION_SUNG_ALPHA = 0.91f
     const val WORD_TRANSLITERATION_UNSUNG_ALPHA = 0.50f
 
-    /** 伴唱透明度较低，作为背景声部显示。 */
-    const val ACCOMPANIMENT_SUNG_ALPHA = 0.35f
-    const val ACCOMPANIMENT_UNSUNG_ALPHA = 0.18f
-    const val ACCOMPANIMENT_SECONDARY_SUNG_ALPHA = 0.30f
-    const val ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA = 0.16f
+    /**
+     * Background vocals use the same colour as the main lyric (the reference window only dims them to 85%),
+     * so the filled text no longer looks like a different colour.
+     */
+    const val ACCOMPANIMENT_SUNG_ALPHA = 0.85f
+    const val ACCOMPANIMENT_SECONDARY_SUNG_ALPHA = 0.70f
+    const val ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA = 0.40f
+
+    /** A background vocal folds open 0.5 s before it starts (or with the line when it starts together with it). */
+    const val ACCOMPANIMENT_OPEN_LEAD_MS = 500L
+
+    /** The focus waits for a background vocal that outlasts the next line start, for this long at most. */
+    const val ACCOMPANIMENT_HOLD_MAX_MS = 6_000L
+    const val ACCOMPANIMENT_NEAR_START_MS = 500L
+    const val ACCOMPANIMENT_ABOVE_THRESHOLD_MS = 100L
+    const val ACCOMPANIMENT_OPEN_DURATION_MS = 1000
+    const val ACCOMPANIMENT_FADE_DURATION_MS = 800
+    const val ACCOMPANIMENT_CLOSED_BLUR_DP = 10f
+    const val ACCOMPANIMENT_CLOSED_TRANSLATION_BLUR_DP = 8f
+    const val ACCOMPANIMENT_TRANSLATION_BLUR_DELAY_MS = 150
+
+    // Instrumental break: three dots that fill up and a countdown (reference window: .ln.gap)
+    const val GAP_KEY_PREFIX = "__gap__"
+    const val GAP_INTRO_MIN_MS = 5_000L
+    const val GAP_BREAK_MIN_MS = 7_000L
+    const val GAP_END_LEAD_MS = 300L
+    const val GAP_DOT_SIZE_DP = 14
+    const val GAP_DOT_SPACING_DP = 9
+    const val GAP_DOT_BASE_ALPHA = 0.28f
+    const val GAP_BREATH_SCALE = 1.32f
+    const val GAP_BREATH_PERIOD_MS = 2400
+    const val GAP_BREATH_STAGGER_MS = 260
+    const val GAP_VERTICAL_PADDING_DP = 14
 
     /** 无逐字时间轴的翻译和音译透明度。 */
     const val TRANSLATION_TEXT_ALPHA = 0.72f
@@ -211,8 +249,6 @@ private object LyricUIConstants {
     const val SLOW_WORD_MAX_SCALE_INCREASE = 0.1f
     const val SLOW_WORD_MAX_DIP = 0.5f
     const val SLOW_WORD_MAX_FLOAT_OFFSET_PX = 4f
-    const val ACCOMPANIMENT_VISIBILITY_PADDING_MS = 600L
-    const val ACCOMPANIMENT_ANIMATION_DURATION_MS = 480
 
     /** 底部新歌词的初始下移距离。 */
     val BOTTOM_FLY_IN_OFFSET = 32.dp
@@ -296,8 +332,18 @@ private class LineTimeline private constructor(
                         transitionDuration(line.time - previousEnd, moveMs)
                     }
                 durations[index] = duration
-                // The move starts exactly when the line starts (no early start), like the reference window.
-                starts[index] = line.time
+                // The move starts when the line starts, but never while the previous line's background vocal is
+                // still being sung: that line keeps the focus until the vocal is done (at most a few seconds).
+                val previousBackgroundEnd =
+                    (lines.getOrNull(index - 1) as? LyricItem.WordsLyric)
+                        ?.accompaniment
+                        ?.maxOfOrNull { it.endTime } ?: Long.MIN_VALUE
+                starts[index] =
+                    if (previousBackgroundEnd > line.time) {
+                        min(previousBackgroundEnd, line.time + LyricUIConstants.ACCOMPANIMENT_HOLD_MAX_MS)
+                    } else {
+                        line.time
+                    }
                 // 提前后可能倒序，取单调上界保证二分查找有效。
                 if (index > 0 && starts[index] < starts[index - 1]) starts[index] = starts[index - 1]
                 maxEnd = max(maxEnd, (line as? LyricItem.WordsLyric)?.endTime ?: Long.MIN_VALUE)
@@ -535,9 +581,9 @@ fun LyricsUI(
     isSynced: Boolean = true,
     onSeekToTime: (Long) -> Unit = {},
 ) {
-    val lyricLines = remember(lyric) { lyric.sortedBy { it.time } }
+    val sortedLines = remember(lyric) { lyric.sortedBy { it.time } }
 
-    if (lyricLines.isEmpty()) {
+    if (sortedLines.isEmpty()) {
         EmptyLyricState(modifier)
         return
     }
@@ -546,13 +592,16 @@ fun LyricsUI(
     if (!isSynced) {
         PlainLyricsList(
             modifier = modifier,
-            lines = lyricLines,
+            lines = sortedLines,
             displayMode = displayMode,
             displayOptions = displayOptions,
             styleSettings = styleSettings,
         )
         return
     }
+
+    // Long instrumental breaks (and a long intro) get a line of three dots with a countdown, like the reference window.
+    val lyricLines = remember(sortedLines) { insertGapLines(sortedLines) }
 
     val style = rememberLyricsUIStyle(displayMode, styleSettings)
     val lazyListState = rememberLazyListState()
@@ -775,7 +824,18 @@ fun LyricsUI(
                             )
 
                         is LyricItem.WordsLyric ->
-                            WordsLyricLine(
+                            if (line.isGapLine()) {
+                                GapLine(
+                                    gap = line,
+                                    currentTimeState = currentTimeState,
+                                    isActive = isActive,
+                                    alphaProvider = { alphaState.value },
+                                    scaleProvider = { scaleState.value },
+                                    blurRadius = blurRadius.dp,
+                                    style = style,
+                                    modifier = placementModifier,
+                                )
+                            } else WordsLyricLine(
                                 lyric = line,
                                 currentTimeState = currentTimeState,
                                 isActive = isActive,
@@ -1364,6 +1424,186 @@ private fun wordBoundingBox(
     return rect
 }
 
+// ==================== 间奏倒计时 ====================
+
+private fun LyricItem.isGapLine(): Boolean = key.startsWith(LyricUIConstants.GAP_KEY_PREFIX)
+
+/** Latest moment at which this line (or one of its background vocals) is still being sung. */
+private fun LyricItem.WordsLyric.lastSungMs(): Long = max(endTime, accompaniment.maxOfOrNull { it.endTime } ?: Long.MIN_VALUE)
+
+private fun gapLineOf(
+    startMs: Long,
+    endMs: Long,
+    ordinal: Int,
+): LyricItem.WordsLyric =
+    LyricItem.WordsLyric(
+        words = emptyList(),
+        translation = emptyList(),
+        startTime = startMs,
+        endTime = max(startMs, endMs),
+        key = "${LyricUIConstants.GAP_KEY_PREFIX}$ordinal",
+    )
+
+/**
+ * Adds a gap line at the start when the first lyric comes after at least 5 s, and between two lines when
+ * nobody sings for at least 7 s. The gap ends 0.3 s before the next lyric (as in the reference window).
+ */
+private fun insertGapLines(lines: List<LyricItem>): List<LyricItem> {
+    if (lines.isEmpty()) return lines
+    val result = ArrayList<LyricItem>(lines.size + 4)
+    var ordinal = 0
+    val first = lines.first()
+    if (first.time >= LyricUIConstants.GAP_INTRO_MIN_MS) {
+        result += gapLineOf(0L, first.time - LyricUIConstants.GAP_END_LEAD_MS, ordinal++)
+    }
+    var latestEnd = Long.MIN_VALUE
+    lines.forEachIndexed { index, line ->
+        result += line
+        if (line is LyricItem.WordsLyric) latestEnd = max(latestEnd, line.lastSungMs())
+        val next = lines.getOrNull(index + 1)
+        if (next != null && latestEnd != Long.MIN_VALUE && next.time - latestEnd >= LyricUIConstants.GAP_BREAK_MIN_MS) {
+            result += gapLineOf(latestEnd, next.time - LyricUIConstants.GAP_END_LEAD_MS, ordinal++)
+        }
+    }
+    return result
+}
+
+/** One of the three dots: fills up with the break's progress and breathes while the break is the current line. */
+@Composable
+private fun GapDot(
+    index: Int,
+    progressState: State<Float>,
+    breathing: Boolean,
+    color: Color,
+) {
+    val breath =
+        if (breathing) {
+            val transition = rememberInfiniteTransition(label = "gapBreath$index")
+            transition.animateFloat(
+                initialValue = 1f,
+                targetValue = 1f,
+                animationSpec =
+                    infiniteRepeatable(
+                        animation =
+                            keyframes {
+                                durationMillis = LyricUIConstants.GAP_BREATH_PERIOD_MS
+                                1f at 0
+                                LyricUIConstants.GAP_BREATH_SCALE at (LyricUIConstants.GAP_BREATH_PERIOD_MS / 2) using FastOutSlowInEasing
+                                1f at LyricUIConstants.GAP_BREATH_PERIOD_MS using FastOutSlowInEasing
+                            },
+                        repeatMode = RepeatMode.Restart,
+                        initialStartOffset = StartOffset(index * LyricUIConstants.GAP_BREATH_STAGGER_MS, StartOffsetType.Delay),
+                    ),
+                label = "gapBreathScale$index",
+            )
+        } else {
+            null
+        }
+    Canvas(
+        modifier =
+            Modifier
+                .size(LyricUIConstants.GAP_DOT_SIZE_DP.dp)
+                .graphicsLayer {
+                    val scale = breath?.value ?: 1f
+                    scaleX = scale
+                    scaleY = scale
+                },
+    ) {
+        // 0 = not reached yet (dim), 1 = lit; each dot takes a third of the break.
+        val lit = (progressState.value * 3f - index).coerceIn(0f, 1f)
+        val alpha = LyricUIConstants.GAP_DOT_BASE_ALPHA + (1f - LyricUIConstants.GAP_DOT_BASE_ALPHA) * lit
+        drawCircle(color = color.copy(alpha = alpha))
+    }
+}
+
+/** An instrumental break: three dots that fill up, and the seconds left until the next lyric. */
+@Composable
+private fun GapLine(
+    gap: LyricItem.WordsLyric,
+    currentTimeState: State<Long>,
+    isActive: Boolean,
+    alphaProvider: () -> Float,
+    scaleProvider: () -> Float,
+    blurRadius: Dp,
+    style: LyricsUIStyle,
+    modifier: Modifier = Modifier,
+) {
+    val color = MaterialTheme.colorScheme.onSurface
+    val lengthMs = max(100L, gap.endTime - gap.startTime)
+    val progressState =
+        remember(gap, currentTimeState) {
+            derivedStateOf {
+                ((currentTimeState.value - gap.startTime).toFloat() / lengthMs).coerceIn(0f, 1f)
+            }
+        }
+    // Whole seconds until the next lyric. When the break is not current it shows the full length again.
+    val fullSeconds = remember(gap) { secondsLeft(gap, gap.startTime) }
+    val seconds by remember(gap, isActive, currentTimeState) {
+        derivedStateOf { if (isActive) secondsLeft(gap, currentTimeState.value) else fullSeconds }
+    }
+    val blurEffect = rememberLineBlurEffect(blurRadius)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(LyricUIConstants.GAP_DOT_SPACING_DP.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    this.alpha = alphaProvider()
+                    val scale = scaleProvider()
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin =
+                        lineTransformOrigin(
+                            alignEnd = false,
+                            paddingFraction = if (size.width > 0f) style.horizontalPadding.toPx() / size.width else 0f,
+                        )
+                    renderEffect = blurEffect
+                }.padding(
+                    horizontal = style.horizontalPadding,
+                    vertical = LyricUIConstants.GAP_VERTICAL_PADDING_DP.dp,
+                ),
+    ) {
+        repeat(3) { index ->
+            GapDot(index = index, progressState = progressState, breathing = isActive, color = color)
+        }
+        AnimatedContent(
+            targetState = seconds,
+            transitionSpec = {
+                // Each new number rolls up into place while the old one lifts away.
+                (
+                    fadeIn(tween(600, easing = LyricLineScaleEasing)) +
+                        slideInVertically(tween(600, easing = LyricLineScaleEasing)) { it / 2 }
+                ) togetherWith
+                    (
+                        fadeOut(tween(450, easing = LyricLineScaleEasing)) +
+                            slideOutVertically(tween(450, easing = LyricLineScaleEasing)) { -it / 2 }
+                    )
+            },
+            modifier = Modifier.padding(start = 2.dp),
+            label = "gapCountdown",
+        ) { value ->
+            Text(
+                text = value.toString(),
+                style =
+                    MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
+                    ),
+                color = color,
+            )
+        }
+    }
+}
+
+private fun secondsLeft(
+    gap: LyricItem.WordsLyric,
+    timeMs: Long,
+): Int =
+    ceil((gap.endTime + LyricUIConstants.GAP_END_LEAD_MS - timeMs) / 1000.0)
+        .toInt()
+        .coerceAtLeast(1)
+
 /** 展示支持单词级进度的逐字歌词行。 */
 @Composable
 private fun WordsLyricLine(
@@ -1400,11 +1640,13 @@ private fun WordsLyricLine(
                 .joinToString(separator = "") { it.content }
                 .ifBlank { lyric.getSentenceContent() }
         }
-    val (beforeAccompaniment, afterAccompaniment) =
-        remember(lyric) {
+    val mainStartMs = remember(lyric) { lyric.words.minOfOrNull { it.startTime } ?: lyric.startTime }
+    // A background vocal that starts clearly before the main lyric (or exactly with it) sits above it, otherwise below.
+    val (aboveAccompaniment, belowAccompaniment) =
+        remember(lyric, sentence) {
             lyric.accompaniment
                 .sortedBy { it.startTime }
-                .partition { it.startTime < lyric.startTime }
+                .partition { sentence.isNotBlank() && it.isAboveMain(mainStartMs) }
         }
 
     // 已唱侧随当前行进入和退出渐变。
@@ -1421,11 +1663,21 @@ private fun WordsLyricLine(
             displayOptions.transliterationMode,
             displayOptions.preferredTransliterationLanguage,
         )
-    // Transliteration sits under the words by default, or above them (Top).
+    // "Attach to words" on: the first transliteration is split over the words and sits right above (or under) each one.
+    val attachedTransliteration =
+        remember(renderWords, transliterations, style.attachTransliterationToWords) {
+            if (style.attachTransliterationToWords) {
+                transliterations.firstOrNull()?.let { mapTransliterationToWords(renderWords, it) }
+            } else {
+                null
+            }
+        }
+    val plainTransliterations = if (attachedTransliteration != null) transliterations.drop(1) else transliterations
+    // Off: the transliteration is one plain line above (or under) the whole lyric line.
     val transliterationBlock: @Composable () -> Unit = {
         val onTop = style.transliterationOnTop
-        if (transliterations.isNotEmpty()) {
-            transliterations.forEach { transliteration ->
+        if (plainTransliterations.isNotEmpty()) {
+            plainTransliterations.forEach { transliteration ->
                 if (!onTop) Spacer(modifier = Modifier.height(2.dp))
                 TranslationLine(
                     translation = transliteration,
@@ -1441,11 +1693,11 @@ private fun WordsLyricLine(
                     textMeasurer = textMeasurer,
                     displayOptions = displayOptions,
                     textStyle = style.phoneticTextStyle,
-                    timed = style.attachTransliterationToWords,
+                    timed = false,
                 )
                 if (onTop) Spacer(modifier = Modifier.height(2.dp))
             }
-        } else if (!lyric.phonetic.isNullOrBlank()) {
+        } else if (transliterations.isEmpty() && !lyric.phonetic.isNullOrBlank()) {
             if (!onTop) Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = lyric.phonetic!!,
@@ -1493,12 +1745,12 @@ private fun WordsLyricLine(
             Spacer(modifier = Modifier.height(4.dp))
         }
 
-        beforeAccompaniment.forEach { background ->
+        aboveAccompaniment.forEach { background ->
             AccompanimentLine(
                 background = background,
                 currentTimeState = currentTimeState,
                 litFraction = litFractionState,
-                placement = AccompanimentPlacement.Before,
+                mainStartMs = mainStartMs,
                 style = style,
                 textMeasurer = textMeasurer,
                 parentAgents = agents,
@@ -1528,6 +1780,28 @@ private fun WordsLyricLine(
                 rubyTextStyle = style.rubyTextStyle,
                 showRuby = displayOptions.showRuby,
                 showEmptyBeat = displayOptions.showEmptyBeat,
+                attachedTexts = attachedTransliteration,
+                attachedStyle = style.phoneticTextStyle,
+                attachedColor = transliterationColor,
+                attachedOnTop = style.transliterationOnTop,
+            )
+        }
+
+        // Order: main lyric, background vocal (with its own translation underneath), transliteration, main translation.
+        belowAccompaniment.forEach { background ->
+            AccompanimentLine(
+                background = background,
+                currentTimeState = currentTimeState,
+                litFraction = litFractionState,
+                mainStartMs = mainStartMs,
+                style = style,
+                textMeasurer = textMeasurer,
+                parentAgents = agents,
+                voiceIndexById = voiceIndexById,
+                colorScheme = colorScheme,
+                fallbackAccent = voiceAccent,
+                fallbackAlignEnd = alignEnd,
+                displayOptions = displayOptions,
             )
         }
 
@@ -1555,29 +1829,7 @@ private fun WordsLyricLine(
                 displayOptions = displayOptions,
             )
         }
-
-        afterAccompaniment.forEach { background ->
-            AccompanimentLine(
-                background = background,
-                currentTimeState = currentTimeState,
-                litFraction = litFractionState,
-                placement = AccompanimentPlacement.After,
-                style = style,
-                textMeasurer = textMeasurer,
-                parentAgents = agents,
-                voiceIndexById = voiceIndexById,
-                colorScheme = colorScheme,
-                fallbackAccent = voiceAccent,
-                fallbackAlignEnd = alignEnd,
-                displayOptions = displayOptions,
-            )
-        }
     }
-}
-
-private enum class AccompanimentPlacement {
-    Before,
-    After,
 }
 
 @Composable
@@ -1773,6 +2025,8 @@ private fun TranslationLine(
     textStyle: TextStyle = style.wordsTranslationTextStyle,
     /** False draws the line as plain static text instead of timing it word by word. */
     timed: Boolean = true,
+    /** Shows the text in brackets, like the translation of a background vocal in the reference window. */
+    wrapInParens: Boolean = false,
 ) {
     val words =
         remember(translation, displayOptions.obscureObscene) {
@@ -1785,7 +2039,7 @@ private fun TranslationLine(
         remember(translation, words) {
             words.joinToString(separator = "") { it.content }.ifBlank { translation.content }
         }
-    if (words.isNotEmpty() && timed) {
+    if (words.isNotEmpty() && timed && !wrapInParens) {
         ProgressiveWordsText(
             text = text,
             words = words,
@@ -1804,7 +2058,7 @@ private fun TranslationLine(
         )
     } else {
         Text(
-            text = text,
+            text = if (wrapInParens) "($text)" else text,
             style = textStyle,
             color = color,
             textAlign = textAlign,
@@ -1814,12 +2068,36 @@ private fun TranslationLine(
     }
 }
 
+/** Opens the background vocal when it is about to be sung: 0.5 s before it, or with the line if they start together. */
+private fun LyricItem.WordsLyric.AccompanimentLyric.openAtMs(mainStartMs: Long): Long =
+    if (abs(startTime - mainStartMs) <= LyricUIConstants.ACCOMPANIMENT_NEAR_START_MS) {
+        mainStartMs
+    } else {
+        startTime - LyricUIConstants.ACCOMPANIMENT_OPEN_LEAD_MS
+    }
+
+private fun LyricItem.WordsLyric.AccompanimentLyric.isAboveMain(mainStartMs: Long): Boolean {
+    val difference = mainStartMs - startTime
+    return difference > LyricUIConstants.ACCOMPANIMENT_ABOVE_THRESHOLD_MS || difference == 0L
+}
+
+/** Blur in dp for a layer; 0 removes the effect. */
+private fun GraphicsLayerScope.blurDp(radiusDp: Float) {
+    renderEffect =
+        if (radiusDp > 0.05f) {
+            val radiusPx = radiusDp * density
+            BlurEffect(radiusPx, radiusPx, TileMode.Decal)
+        } else {
+            null
+        }
+}
+
 @Composable
 private fun AccompanimentLine(
     background: LyricItem.WordsLyric.AccompanimentLyric,
     currentTimeState: State<Long>,
     litFraction: State<Float>,
-    placement: AccompanimentPlacement,
+    mainStartMs: Long,
     style: LyricsUIStyle,
     textMeasurer: TextMeasurer,
     parentAgents: List<LyricItem.Agent>,
@@ -1830,10 +2108,10 @@ private fun AccompanimentLine(
     displayOptions: LyricsDisplayOptions,
 ) {
     val backgroundAgents = background.voiceAgents().ifEmpty { parentAgents }
-    val voiceIndex = backgroundAgents.firstOrNull()?.id?.let(voiceIndexById::get)
-    val textColor = voiceIndex?.let { voiceAccent(it, colorScheme) } ?: fallbackAccent ?: colorScheme.onSurface
+    // A background vocal always uses the colour and the side of its main lyric, so it never looks like another voice.
+    val textColor = fallbackAccent ?: colorScheme.onSurface
     val secondaryColor = textColor.copy(alpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA)
-    val alignEnd = voiceIndex?.let(::voiceAlignEnd) ?: fallbackAlignEnd
+    val alignEnd = fallbackAlignEnd
     val horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
     val textAlign = if (alignEnd) TextAlign.End else TextAlign.Start
     val words =
@@ -1845,63 +2123,61 @@ private fun AccompanimentLine(
         }
     if (words.isEmpty()) return
 
-    val visible by remember(background, currentTimeState) {
-        derivedStateOf {
-            val currentTime = currentTimeState.value
-            currentTime >= background.startTime - LyricUIConstants.ACCOMPANIMENT_VISIBILITY_PADDING_MS &&
-                currentTime <= background.endTime + LyricUIConstants.ACCOMPANIMENT_VISIBILITY_PADDING_MS
-        }
+    // It opens once and then stays open (it only folds again when you seek back before it).
+    val openAtMs = remember(background, mainStartMs) { background.openAtMs(mainStartMs) }
+    val visible by remember(openAtMs, currentTimeState) {
+        derivedStateOf { currentTimeState.value >= openAtMs }
     }
-    val pivotX = if (alignEnd) 1f else 0f
-    val pivotY = if (placement == AccompanimentPlacement.Before) 0f else 1f
-    val alignment = if (placement == AccompanimentPlacement.Before) Alignment.Top else Alignment.Bottom
+    // Its space is always reserved, so opening never moves the main lyric; it only fades in.
+    val alphaState =
+        animateFloatAsState(
+            targetValue = if (visible) 1f else 0f,
+            animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_FADE_DURATION_MS, easing = LyricLineAlphaEasing),
+            label = "accompanimentAlpha",
+        )
+    // It comes into focus as it appears; its translation follows a beat later.
+    val blurState =
+        animateFloatAsState(
+            targetValue = if (visible) 0f else LyricUIConstants.ACCOMPANIMENT_CLOSED_BLUR_DP,
+            animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS, easing = LyricLineScaleEasing),
+            label = "accompanimentBlur",
+        )
+    val translationBlurState =
+        animateFloatAsState(
+            targetValue = if (visible) 0f else LyricUIConstants.ACCOMPANIMENT_CLOSED_TRANSLATION_BLUR_DP,
+            animationSpec =
+                tween(
+                    LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS,
+                    delayMillis = LyricUIConstants.ACCOMPANIMENT_TRANSLATION_BLUR_DELAY_MS,
+                    easing = LyricLineScaleEasing,
+                ),
+            label = "accompanimentTranslationBlur",
+        )
 
     // 伴唱动画可能覆盖主句和翻译，因此使用独立离屏宿主承载蒙版。
     val maskRegistry = remember(litFraction) { SweepMaskRegistry(litFraction) }
     val sweepFeatherPx = with(LocalDensity.current) { style.sweepFeather.toPx() }
 
-    AnimatedVisibility(
-        visible = visible,
-        modifier = Modifier.fillMaxWidth(),
-        enter =
-            fadeIn(tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS)) +
-                scaleIn(
-                    initialScale = 0.88f,
-                    transformOrigin = TransformOrigin(pivotX, pivotY),
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ) +
-                slideInVertically(
-                    initialOffsetY = { height -> if (placement == AccompanimentPlacement.Before) -height / 3 else height / 3 },
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ) +
-                expandVertically(
-                    expandFrom = alignment,
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ),
-        exit =
-            fadeOut(tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS)) +
-                scaleOut(
-                    targetScale = 0.88f,
-                    transformOrigin = TransformOrigin(pivotX, pivotY),
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ) +
-                slideOutVertically(
-                    targetOffsetY = { height -> if (placement == AccompanimentPlacement.Before) -height / 3 else height / 3 },
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ) +
-                shrinkVertically(
-                    shrinkTowards = alignment,
-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
-                ),
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    clip = false
+                    blurDp(blurState.value)
+                },
     ) {
         Column(
             horizontalAlignment = horizontalAlignment,
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .sweepMaskHost(maskRegistry, sweepFeatherPx),
+                    .graphicsLayer {
+                        compositingStrategy = CompositingStrategy.Offscreen
+                        alpha = alphaState.value
+                    }.sweepMaskHost(maskRegistry, sweepFeatherPx),
         ) {
+            Spacer(modifier = Modifier.height(2.dp))
             if (displayOptions.showAgentLabel && backgroundAgents.hasUsefulLabels()) {
                 LineContextLabel(
                     songPart = null,
@@ -1910,6 +2186,18 @@ private fun AccompanimentLine(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
             }
+            val transliterations =
+                background.transliterations.visibleTransliterations(
+                    displayOptions.transliterationMode,
+                    displayOptions.preferredTransliterationLanguage,
+                )
+            val attachedTransliteration =
+                if (style.attachTransliterationToWords) {
+                    transliterations.firstOrNull()?.let { mapTransliterationToWords(words, it) }
+                } else {
+                    null
+                }
+            val plainTransliterations = if (attachedTransliteration != null) transliterations.drop(1) else transliterations
             ProgressiveWordsText(
                 text =
                     words
@@ -1917,10 +2205,16 @@ private fun AccompanimentLine(
                         .ifBlank { background.content.orEmpty() },
                 words = words,
                 currentTimeState = currentTimeState,
+                attachedTexts = attachedTransliteration,
+                attachedStyle = style.phoneticTextStyle,
+                attachedColor = secondaryColor,
+                attachedOnTop = style.transliterationOnTop,
                 textStyle = style.accompanimentTextStyle,
                 color = textColor,
                 sungAlpha = LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA,
-                unsungAlpha = LyricUIConstants.ACCOMPANIMENT_UNSUNG_ALPHA,
+                unsungAlpha =
+                    (LyricUIConstants.INACTIVE_LINE_ALPHA * style.unsungFactor * LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA)
+                        .coerceIn(0f, LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA),
                 maskRegistry = maskRegistry,
                 textMeasurer = textMeasurer,
                 modifier = Modifier.fillMaxWidth(),
@@ -1930,13 +2224,8 @@ private fun AccompanimentLine(
                 showEmptyBeat = displayOptions.showEmptyBeat,
             )
 
-            val transliterations =
-                background.transliterations.visibleTransliterations(
-                    displayOptions.transliterationMode,
-                    displayOptions.preferredTransliterationLanguage,
-                )
-            if (transliterations.isNotEmpty()) {
-                transliterations.forEach { transliteration ->
+            if (plainTransliterations.isNotEmpty()) {
+                plainTransliterations.forEach { transliteration ->
                     Spacer(modifier = Modifier.height(2.dp))
                     TranslationLine(
                         translation = transliteration,
@@ -1950,9 +2239,10 @@ private fun AccompanimentLine(
                         textMeasurer = textMeasurer,
                         displayOptions = displayOptions,
                         textStyle = style.phoneticTextStyle,
+                        timed = false,
                     )
                 }
-            } else if (!background.phonetic.isNullOrBlank()) {
+            } else if (transliterations.isEmpty() && !background.phonetic.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = background.phonetic!!,
@@ -1963,6 +2253,7 @@ private fun AccompanimentLine(
                 )
             }
 
+            // The translation of the background vocal sits right under it, in brackets.
             val translations =
                 background.translationVariantsFor(
                     displayOptions.translationMode,
@@ -1970,19 +2261,31 @@ private fun AccompanimentLine(
                 )
             translations.forEach { translation ->
                 Spacer(modifier = Modifier.height(2.dp))
-                TranslationLine(
-                    translation = translation,
-                    currentTimeState = currentTimeState,
-                    style = style,
-                    color = secondaryColor,
-                    sungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA,
-                    unsungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA,
-                    textAlign = textAlign,
-                    maskRegistry = maskRegistry,
-                    textMeasurer = textMeasurer,
-                    displayOptions = displayOptions,
-                    textStyle = style.accompanimentTranslationTextStyle,
-                )
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                clip = false
+                                blurDp(translationBlurState.value)
+                            },
+                ) {
+                    TranslationLine(
+                        translation = translation,
+                        currentTimeState = currentTimeState,
+                        style = style,
+                        color = secondaryColor,
+                        sungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA,
+                        unsungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA,
+                        textAlign = textAlign,
+                        maskRegistry = maskRegistry,
+                        textMeasurer = textMeasurer,
+                        displayOptions = displayOptions,
+                        textStyle = style.accompanimentTranslationTextStyle,
+                        timed = false,
+                        wrapInParens = true,
+                    )
+                }
             }
         }
     }
@@ -2010,6 +2313,11 @@ private fun ProgressiveWordsText(
     rubyTextStyle: TextStyle? = null,
     showRuby: Boolean = false,
     showEmptyBeat: Boolean = false,
+    /** Transliteration attached to each word (same size as `words`), drawn above or under that word. */
+    attachedTexts: List<String>? = null,
+    attachedStyle: TextStyle? = null,
+    attachedColor: Color = color,
+    attachedOnTop: Boolean = true,
 ) {
     if (words.isEmpty()) {
         Text(
@@ -2063,9 +2371,12 @@ private fun ProgressiveWordsText(
             }
         }
 
+    val hasAttached = attachedTexts != null && attachedStyle != null
     FlowRow(
         modifier = modifier,
         horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
+        // With a transliteration above the words, words without one stay on the same baseline as their neighbours.
+        itemVerticalAlignment = if (hasAttached && attachedOnTop) Alignment.Bottom else Alignment.Top,
     ) {
         // 计算当前词与下一个词之间的空白和空拍。
         fun gapAfter(index: Int): Dp {
@@ -2085,6 +2396,7 @@ private fun ProgressiveWordsText(
                 } else {
                     ""
                 }
+            val attachedText = if (hasAttached) attachedTexts?.getOrNull(index).orEmpty() else ""
             // 间隔放在远离对齐边的一侧，避免换行后出现隐形留白。
             val leadingGap = if (alignEnd && index > 0) gapAfter(index - 1) else 0.dp
             val trailingGap = if (!alignEnd && index < words.lastIndex) gapAfter(index) else 0.dp
@@ -2115,6 +2427,15 @@ private fun ProgressiveWordsText(
                             },
                     )
                 }
+                if (attachedText.isNotBlank() && attachedOnTop) {
+                    Text(
+                        text = attachedText,
+                        style = attachedStyle!!,
+                        color = attachedColor,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
                 val slowWordLayout = slowWordLayouts[index]
                 if (slowWordLayout != null) {
                     SlowWordGlyphs(
@@ -2133,8 +2454,49 @@ private fun ProgressiveWordsText(
                         softWrap = false,
                     )
                 }
+                if (attachedText.isNotBlank() && !attachedOnTop) {
+                    Text(
+                        text = attachedText,
+                        style = attachedStyle!!,
+                        color = attachedColor,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Splits a timed transliteration over the words of the line: every transliteration word goes to the last lyric
+ * word that started at or before it. Returns one text per word (empty when a word has none, or when it only
+ * repeats the word itself), or null when the transliteration has no word timing or does not line up with the
+ * words (then it is shown as one plain line instead, like the reference window).
+ */
+private fun mapTransliterationToWords(
+    words: List<LyricItem.WordsLyric.WordWithTiming>,
+    transliteration: LyricItem.WordsLyric.Translation,
+): List<String>? {
+    val timed = transliteration.words.filter { it.content.isNotBlank() }.sortedBy { it.startTime }
+    val candidates = words.indices.filter { words[it].content.isNotBlank() }
+    if (timed.isEmpty() || candidates.isEmpty()) return null
+    val toleranceMs = 400L
+    val buckets = MutableList(words.size) { "" }
+    var matched = 0
+    timed.forEach { piece ->
+        var target = candidates.first()
+        for (index in candidates) {
+            if (words[index].startTime <= piece.startTime + 120L) target = index else break
+        }
+        val word = words[target]
+        if (piece.startTime >= word.startTime - toleranceMs && piece.startTime <= word.endTime + toleranceMs) matched++
+        buckets[target] = if (buckets[target].isEmpty()) piece.content.trim() else buckets[target] + " " + piece.content.trim()
+    }
+    if (matched * 2 < timed.size) return null
+    return words.indices.map { index ->
+        val text = buckets[index]
+        if (text.equals(words[index].content.trim(), ignoreCase = true)) "" else text
     }
 }
 
