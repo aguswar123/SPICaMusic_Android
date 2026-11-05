@@ -1,9 +1,10 @@
 package me.spica27.spicamusic.ui.widget
 
-import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.DeferredTargetAnimation
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -21,48 +22,68 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.round
-import kotlin.math.PI
-import kotlin.math.cos
+import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.ln
+import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
-
-/** 歌词行位移曲线，先缓后快再减速。 */
-internal val LyricLineMoveEasing = CubicBezierEasing(0.4f, 0.1f, 0f, 1f)
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
- * Apple Music-style jiggle for lines below the current one: the line overshoots its new position
- * and settles back like a damped spring.
+ * Glide shared by every line (current, above and below), the same curve as the reference lyrics window:
+ * `1 - (1 + 9t) * e^(-9t)` with t running to 1.1 over the move time. Fast at first, then a long soft landing.
+ */
+internal val LyricLineMoveEasing =
+    Easing { x ->
+        if (x <= 0f) {
+            0f
+        } else if (x >= 1f) {
+            1f
+        } else {
+            val t = x * 1.1f
+            1f - (1f + 9f * t) * exp(-9f * t)
+        }
+    }
+
+/**
+ * Apple Music-style jiggle for the lines below the current one, as in the reference lyrics window:
+ * on top of the shared glide the line gets a small wobble of FIXED size in dp (it does not depend on how far
+ * the list moved) that overshoots against the direction of travel and dies out over [durationMillis].
  *
- * @param strength 10..100 (%). Sets how far the line overshoots: 100% overshoots by about 30% of the move.
- * @param durationMillis time the line takes to settle.
+ * @param strength 10..100 (%). Sets the size of the wobble (6 dp at 0% up to 26 dp at 100%) and how fast it rings.
+ * @param durationMillis time the wobble takes to settle.
  */
 internal class JiggleSpec(
     val strength: Int,
     val durationMillis: Int,
+    density: Float,
 ) {
-    /** Step response of an under-damped spring: starts and ends at rest, overshoots by `strength * 0.3%`. */
-    val easing: Easing =
+    private val s = strength / 100f
+
+    /** Size of the wobble in pixels. */
+    val amplitudePx: Float = (6f + 20f * s) * density
+    private val decay = 6.5f - 2f * s
+    private val frequency = 9f + 2f * s
+    private val peak: Float =
         run {
-            val overshoot = (strength / 100f * MAX_OVERSHOOT).coerceIn(0.01f, 0.6f)
-            // Decay rate fixed so the motion has died out at the end; the frequency follows from the overshoot.
-            val decay = DECAY
-            val omega = decay * PI.toFloat() / -ln(overshoot)
-            val k = decay / omega
-            Easing { t ->
-                if (t <= 0f) {
-                    0f
-                } else if (t >= 1f) {
-                    1f
-                } else {
-                    1f - exp(-decay * t) * (cos(omega * t) + k * sin(omega * t))
-                }
+            var m = 0f
+            for (i in 0..400) {
+                val x = i / 400f * RUN
+                m = max(m, abs(exp(-decay * x) * sin(frequency * x)))
             }
+            m
         }
 
+    /** Wobble at [progress] 0..1 of its duration, normalised to -1..1. */
+    fun wobble(progress: Float): Float {
+        if (progress <= 0f || progress >= 1f || peak <= 0f) return 0f
+        val x = progress * RUN
+        return exp(-decay * x) * sin(frequency * x) / peak
+    }
+
     private companion object {
-        const val MAX_OVERSHOOT = 0.3f
-        const val DECAY = 6f
+        const val RUN = 1.1f
     }
 }
 
@@ -83,6 +104,14 @@ private class LinePlacementModifierNode(
     private var offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
     private var isFirstFrame = true
 
+    /** Progress 0..1 of the jiggle wobble of the current move. */
+    private val wobble = Animatable(0f)
+    private var wobbleJob: Job? = null
+
+    /** +1 when the list moved forward (lines travel up), -1 when it moved back. */
+    private var wobbleDirection = 1f
+    private var lastTarget: IntOffset? = null
+
     override fun isMeasurementApproachInProgress(lookaheadSize: IntSize): Boolean = false
 
     override fun Placeable.PlacementScope.isPlacementApproachInProgress(lookaheadCoordinates: LayoutCoordinates): Boolean {
@@ -91,7 +120,7 @@ private class LinePlacementModifierNode(
                 lookaheadScopeCoordinates.localLookaheadPositionOf(lookaheadCoordinates).round()
             }
         updatePlacementTarget(target)
-        return !offsetAnimation.isIdle
+        return !offsetAnimation.isIdle || wobble.isRunning
     }
 
     override fun ApproachMeasureScope.approachMeasure(
@@ -117,19 +146,16 @@ private class LinePlacementModifierNode(
                     lookaheadScopeCoordinates.localPositionOf(coordinates, Offset.Zero).round()
                 }
             val delta = animatedOffset - placementOffset
-            placeable.place(delta.x, delta.y)
+            // The wobble goes against the direction of travel, so a line overshoots and then settles back.
+            val wobbleY =
+                jiggle?.let { -wobbleDirection * it.amplitudePx * it.wobble(wobble.value) } ?: 0f
+            placeable.place(delta.x, delta.y + wobbleY.roundToInt())
         }
     }
 
     private fun animationSpec(): FiniteAnimationSpec<IntOffset> =
         if (isManualScrolling) {
             snap()
-        } else if (jiggle != null) {
-            tween(
-                durationMillis = jiggle!!.durationMillis,
-                delayMillis = delayMillis,
-                easing = jiggle!!.easing,
-            )
         } else {
             tween(
                 durationMillis = durationMillis,
@@ -138,8 +164,29 @@ private class LinePlacementModifierNode(
             )
         }
 
+    /** Starts the wobble when the line's target position changes (a new current line). */
+    private fun noteTargetChange(target: IntOffset) {
+        val previous = lastTarget
+        lastTarget = target
+        if (previous == null || previous == target || isManualScrolling) return
+        val spec = jiggle
+        wobbleJob?.cancel()
+        if (spec == null) {
+            wobbleJob = coroutineScope.launch { wobble.snapTo(0f) }
+            return
+        }
+        wobbleDirection = if (target.y - previous.y < 0) 1f else -1f
+        val wait = delayMillis
+        wobbleJob =
+            coroutineScope.launch {
+                wobble.snapTo(0f)
+                wobble.animateTo(1f, tween(durationMillis = spec.durationMillis, delayMillis = wait, easing = LinearEasing))
+            }
+    }
+
     /** 首次组合的底部歌词先下移，再补间到目标位置。 */
     private fun updatePlacementTarget(target: IntOffset): IntOffset {
+        noteTargetChange(target)
         if (isFirstFrame) {
             isFirstFrame = false
             if (initialOffsetY != 0 && !isManualScrolling) {
@@ -183,6 +230,8 @@ private class LinePlacementModifierNode(
     private fun resetAnimation() {
         offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
         isFirstFrame = true
+        lastTarget = null
+        wobbleJob?.cancel()
     }
 }
 

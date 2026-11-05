@@ -222,40 +222,19 @@ private object LyricUIConstants {
 
 // ==================== 行切换时序 ====================
 
-/** 行透明度曲线。 */
-private val LyricLineAlphaEasing = CubicBezierEasing(0.39f, 0.575f, 0.565f, 1f)
+/** CSS `ease`, used by the reference window for opacity and blur. */
+private val LyricLineAlphaEasing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 
-private val ActiveScaleSpec =
-    tween<Float>(
-        durationMillis = LyricUIConstants.ACTIVE_SCALE_DURATION_MS,
-        delayMillis = LyricUIConstants.ACTIVE_SCALE_DELAY_MS,
-        easing = LyricLineMoveEasing,
-    )
-private val InactiveScaleSpec =
-    tween<Float>(
-        durationMillis = LyricUIConstants.INACTIVE_SCALE_DURATION_MS,
-        delayMillis = LyricUIConstants.INACTIVE_SCALE_DELAY_MS,
-        easing = LyricLineMoveEasing,
-    )
-private val ActiveAlphaSpec =
-    tween<Float>(
-        durationMillis = LyricUIConstants.ACTIVE_ALPHA_DURATION_MS,
-        delayMillis = LyricUIConstants.ACTIVE_ALPHA_DELAY_MS,
-        easing = LyricLineAlphaEasing,
-    )
-private val InactiveAlphaSpec =
-    tween<Float>(
-        durationMillis = LyricUIConstants.INACTIVE_ALPHA_DURATION_MS,
-        delayMillis = LyricUIConstants.INACTIVE_ALPHA_DELAY_MS,
-        easing = LyricLineAlphaEasing,
-    )
+/** The reference window's `--ease`, used for the scale of a line. */
+private val LyricLineScaleEasing = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
 
-/** 计算当前行下方指定距离的位移延迟。 */
-private fun lineStaggerDelayMillis(distanceBelow: Int): Int {
-    val n = distanceBelow.coerceIn(0, LyricUIConstants.LINE_STAGGER_MAX_DISTANCE)
-    if (n == 0) return 0
-    return (LyricUIConstants.LINE_STAGGER_UNIT_MS * 0.25f * (5f * n - n * (n + 1) / 2f)).roundToInt()
-}
+// Becoming the current line: opacity changes at once (its unsung words already sit at the dim of the upcoming
+// lines, so nothing dips), scale and blur ease in over 0.5 s / 0.45 s. Leaving it: opacity, blur 0.45 s, scale 0.5 s.
+private val ActiveScaleSpec = tween<Float>(durationMillis = 500, easing = LyricLineScaleEasing)
+private val InactiveScaleSpec = tween<Float>(durationMillis = 500, easing = LyricLineScaleEasing)
+private val ActiveAlphaSpec = tween<Float>(durationMillis = 0)
+private val InactiveAlphaSpec = tween<Float>(durationMillis = 450, easing = LyricLineAlphaEasing)
+private val LineBlurSpec = tween<Float>(durationMillis = 450, easing = LyricLineAlphaEasing)
 
 /** Delay of a jiggling line `distanceBelow` lines under the current one: grows per line, easing off for far lines. */
 private fun jiggleDelayMillis(
@@ -317,7 +296,8 @@ private class LineTimeline private constructor(
                         transitionDuration(line.time - previousEnd, moveMs)
                     }
                 durations[index] = duration
-                starts[index] = line.time - duration
+                // The move starts exactly when the line starts (no early start), like the reference window.
+                starts[index] = line.time
                 // 提前后可能倒序，取单调上界保证二分查找有效。
                 if (index > 0 && starts[index] < starts[index - 1]) starts[index] = starts[index - 1]
                 maxEnd = max(maxEnd, (line as? LyricItem.WordsLyric)?.endTime ?: Long.MIN_VALUE)
@@ -660,8 +640,8 @@ fun LyricsUI(
             val keepAliveZone = LyricUIConstants.KEEP_ALIVE_ZONE
             // Jiggle: lines below the current one spring into place (Lyrics settings > Jiggle effect).
             val jiggleSpec =
-                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs) {
-                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs)
+                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs, density.density) {
+                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs, density.density)
                 }
             val keepAliveZonePx = with(density) { keepAliveZone.toPx() }
 
@@ -692,7 +672,7 @@ fun LyricsUI(
 
             val highlightedIndex = if (showSeekOverlay) previewIndex else playingIndex
             // 当前行切换时长及下方各行的错峰延迟。
-            val lineMoveDurationMillis = timeline.durationAt(playingIndex)
+            val lineMoveDurationMillis = styleSettings.moveDurationMs
 
             LazyColumn(
                 modifier =
@@ -741,19 +721,18 @@ fun LyricsUI(
                             label = "lyricAlpha",
                             animationSpec = if (distanceFromActive == 0) ActiveAlphaSpec else InactiveAlphaSpec,
                         )
-                    val blurRadius = calculateBlurDp(distanceFromActive, styleSettings.blur).dp
+                    val blurRadius by
+                        animateFloatAsState(
+                            targetValue = calculateBlurDp(distanceFromActive, styleSettings.blur),
+                            animationSpec = LineBlurSpec,
+                            label = "lyricBlur",
+                        )
 
                     val isBelowPlaying = playingIndex in lyricLines.indices && index > playingIndex
                     val jiggleLine = styleSettings.jiggleEnabled && isBelowPlaying
+                    // Each jiggling line waits a little longer than the one above it; the wait levels off for far lines.
                     val staggerDelayMillis =
-                        when {
-                            // Each line waits a little longer than the one above it; the wait levels off for far lines.
-                            jiggleLine ->
-                                jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs)
-
-                            isBelowPlaying -> lineStaggerDelayMillis(index - playingIndex)
-                            else -> 0
-                        }
+                        if (jiggleLine) jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs) else 0
                     val songPart = line.songPartLabel()
                     val previousSongPart = lyricLines.getOrNull(index - 1)?.songPartLabel()
                     val showSongPart =
@@ -784,7 +763,7 @@ fun LyricsUI(
                                 isActive = isActive,
                                 alphaProvider = { alphaState.value },
                                 scaleProvider = { scaleState.value },
-                                blurRadius = blurRadius,
+                                blurRadius = blurRadius.dp,
                                 style = style,
                                 voiceAccent = lineAccent,
                                 alignEnd = alignEnd,
@@ -802,7 +781,7 @@ fun LyricsUI(
                                 isActive = isActive,
                                 alphaProvider = { alphaState.value },
                                 scaleProvider = { scaleState.value },
-                                blurRadius = blurRadius,
+                                blurRadius = blurRadius.dp,
                                 style = style,
                                 textMeasurer = textMeasurer,
                                 agents = lineAgents,
