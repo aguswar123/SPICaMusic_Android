@@ -2,6 +2,7 @@ package me.spica27.spicamusic.feature.settings.domain
 
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.flow.Flow
+import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
 import me.spica27.spicamusic.core.preferences.PreferencesManager
 
 class SettingsUseCases(
@@ -69,5 +70,16 @@ class SettingsUseCases(
         value: List<Float>,
     ) {
         preferencesManager.setFloatList(key, value)
+    }
+
+    /** 歌词样式（字体、字号、模糊、跳动等）。 */
+    val lyricsStyle: Flow<LyricsStyleSettings> get() = preferencesManager.lyricsStyle
+
+    suspend fun updateLyricsStyle(transform: (LyricsStyleSettings) -> LyricsStyleSettings) {
+        preferencesManager.updateLyricsStyle(transform)
+    }
+
+    suspend fun resetLyricsStyle() {
+        preferencesManager.updateLyricsStyle { LyricsStyleSettings() }
     }
 }

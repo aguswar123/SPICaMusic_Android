@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -32,6 +33,7 @@ import me.spica27.spicamusic.ui.navigation.LyricsSourceRoute
 import me.spica27.spicamusic.ui.widget.FloatingLyricsToolbar
 import me.spica27.spicamusic.ui.widget.LyricsDisplayMode
 import me.spica27.spicamusic.ui.widget.LyricsDisplayOptions
+import me.spica27.spicamusic.ui.widget.LyricsSettingsSheet
 import me.spica27.spicamusic.ui.widget.LyricsUI
 import org.koin.compose.viewmodel.koinActivityViewModel
 
@@ -60,6 +62,9 @@ fun LyricsPanel(
     // 此处切换歌词源 / 调整偏移量会同步反映到 mini 歌词
     val viewModel: LyricsViewModel = koinActivityViewModel()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val styleViewModel: LyricsStyleViewModel = koinActivityViewModel()
+    val styleSettings by styleViewModel.style.collectAsStateWithLifecycle()
+    var showLyricsSettings by remember { mutableStateOf(false) }
 
     val backStack = LocalBackStack.current
 
@@ -124,6 +129,7 @@ fun LyricsPanel(
                     currentTimeProvider = currentTimeProvider,
                     displayMode = displayMode,
                     displayOptions = displayOptions,
+                    styleSettings = styleSettings,
                     isSynced = displayed.isSynced,
                     onSeekToTime = { posMs ->
                         viewModel.seekTo(posMs - uiState.lyricsOffsetMs)
@@ -143,6 +149,7 @@ fun LyricsPanel(
         // 浮动工具栏（右下角）：切换入口常驻，保证无内嵌/在线时仍可进入选择本地文件
         FloatingLyricsToolbar(
             offsetEnabled = !uiState.lyricsSuppressed,
+            onOpenLyricsSettings = { showLyricsSettings = true },
             offsetMs = uiState.lyricsOffsetMs,
             onOffsetChange = { viewModel.updateOffset(it) },
             onOpenLyricsSwitcher = {
@@ -159,5 +166,13 @@ fun LyricsPanel(
                                 toolbarBottomInset,
                     ),
         )
+
+        if (showLyricsSettings) {
+            LyricsSettingsSheet(
+                settings = styleSettings,
+                onUpdate = styleViewModel::update,
+                onDismiss = { showLyricsSettings = false },
+            )
+        }
     }
 }

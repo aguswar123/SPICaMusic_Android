@@ -33,6 +33,7 @@ import me.spica27.spicamusic.ui.library.LibraryPageViewModel
 import me.spica27.spicamusic.ui.listeningstats.ListeningStatsViewModel
 import me.spica27.spicamusic.ui.mostedplayed.MostPlayedViewModel
 import me.spica27.spicamusic.ui.player.CurrentPlaylistPanelViewModel
+import me.spica27.spicamusic.ui.player.LyricsStyleViewModel
 import me.spica27.spicamusic.ui.player.LyricsViewModel
 import me.spica27.spicamusic.ui.player.PlayerViewModel
 import me.spica27.spicamusic.ui.playlist.PlaylistViewModel
@@ -112,6 +113,13 @@ object AppModule {
                 LyricsViewModel(
                     player = get<PlayerUseCases>(),
                     lyricsUseCases = get<LyricsUseCases>(),
+                )
+            }
+
+            // 歌词样式 ViewModel（字体、字号、模糊、跳动等）
+            viewModel {
+                LyricsStyleViewModel(
+                    settings = get<SettingsUseCases>(),
                 )
             }
 

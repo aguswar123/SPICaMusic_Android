@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
@@ -22,6 +24,7 @@ import com.materialkolor.ktx.animateColorScheme
 import com.materialkolor.rememberDynamicColorScheme
 import me.spica27.spicamusic.common.entity.ThemeColorStyle
 import me.spica27.spicamusic.ui.widget.rememberClickHighlightIndication
+import me.spica27.spicamusic.ui.widget.withFontFamily
 
 object Shapes {
     val ExtraLarge2CornerBasedShape = RoundedCornerShape(32.dp)
@@ -68,6 +71,8 @@ fun SPICaMusicTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     themeColor: Color,
     themeColorStyle: ThemeColorStyle = ThemeColorStyle.Textured,
+    /** Font for the whole player (Lyrics settings > Font style). Null keeps the app font. */
+    fontFamily: FontFamily? = null,
     content: @Composable () -> Unit,
 ) {
     val colorScheme =
@@ -103,7 +108,9 @@ fun SPICaMusicTheme(
             }
         }
 
-    MaterialTheme(colorScheme = colorScheme) {
+    val typography = remember(fontFamily) { Typography().withFontFamily(fontFamily) }
+
+    MaterialTheme(colorScheme = colorScheme, typography = typography) {
         Box(
             modifier =
                 Modifier.background(

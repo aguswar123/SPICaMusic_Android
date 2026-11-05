@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +53,7 @@ fun FloatingLyricsToolbar(
     onOpenLyricsSwitcher: () -> Unit,
     modifier: Modifier = Modifier,
     offsetEnabled: Boolean = true,
+    onOpenLyricsSettings: () -> Unit = {},
 ) {
     var isExpanded by remember { mutableStateOf(false) }
 
@@ -87,6 +89,14 @@ fun FloatingLyricsToolbar(
                         onOffsetChange = onOffsetChange,
                     )
                 }
+
+                // 歌词设置（字体、字号、模糊、跳动等）
+                LyricsSettingsButton(
+                    onClick = {
+                        isExpanded = false
+                        onOpenLyricsSettings()
+                    },
+                )
 
                 // 切换歌词来源按钮（常驻：无内嵌/在线时用户仍可进入选择本地文件）
                 SwitchLyricsButton(
@@ -164,6 +174,33 @@ private fun OffsetAdjustBar(
                 modifier = Modifier.size(18.dp),
             )
         }
+    }
+}
+
+/**
+ * 歌词设置按钮
+ */
+@Composable
+private fun LyricsSettingsButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LyricsPill(
+        modifier = modifier,
+        onClick = onClick,
+        shape = Shapes.ExtraLargeCornerBasedShape,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.TextFields,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = stringResource(R.string.lyr_set_title),
+            style = LyricsControlDefaults.pillLabelTextStyle,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

@@ -2,6 +2,7 @@ package me.spica27.spicamusic.ui.widget
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.DeferredTargetAnimation
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.snap
@@ -20,9 +21,50 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.round
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.sin
 
 /** 歌词行位移曲线，先缓后快再减速。 */
 internal val LyricLineMoveEasing = CubicBezierEasing(0.4f, 0.1f, 0f, 1f)
+
+/**
+ * Apple Music-style jiggle for lines below the current one: the line overshoots its new position
+ * and settles back like a damped spring.
+ *
+ * @param strength 10..100 (%). Sets how far the line overshoots: 100% overshoots by about 30% of the move.
+ * @param durationMillis time the line takes to settle.
+ */
+internal class JiggleSpec(
+    val strength: Int,
+    val durationMillis: Int,
+) {
+    /** Step response of an under-damped spring: starts and ends at rest, overshoots by `strength * 0.3%`. */
+    val easing: Easing =
+        run {
+            val overshoot = (strength / 100f * MAX_OVERSHOOT).coerceIn(0.01f, 0.6f)
+            // Decay rate fixed so the motion has died out at the end; the frequency follows from the overshoot.
+            val decay = DECAY
+            val omega = decay * PI.toFloat() / -ln(overshoot)
+            val k = decay / omega
+            Easing { t ->
+                if (t <= 0f) {
+                    0f
+                } else if (t >= 1f) {
+                    1f
+                } else {
+                    1f - exp(-decay * t) * (cos(omega * t) + k * sin(omega * t))
+                }
+            }
+        }
+
+    private companion object {
+        const val MAX_OVERSHOOT = 0.3f
+        const val DECAY = 6f
+    }
+}
 
 /**
  * 处理前瞻布局后的歌词行位移。
@@ -34,6 +76,7 @@ private class LinePlacementModifierNode(
     var isManualScrolling: Boolean,
     var durationMillis: Int,
     var delayMillis: Int,
+    var jiggle: JiggleSpec?,
     var initialOffsetY: Int,
 ) : Modifier.Node(),
     ApproachLayoutModifierNode {
@@ -81,6 +124,12 @@ private class LinePlacementModifierNode(
     private fun animationSpec(): FiniteAnimationSpec<IntOffset> =
         if (isManualScrolling) {
             snap()
+        } else if (jiggle != null) {
+            tween(
+                durationMillis = jiggle!!.durationMillis,
+                delayMillis = delayMillis,
+                easing = jiggle!!.easing,
+            )
         } else {
             tween(
                 durationMillis = durationMillis,
@@ -116,12 +165,14 @@ private class LinePlacementModifierNode(
         newIsManualScrolling: Boolean,
         newDurationMillis: Int,
         newDelayMillis: Int,
+        newJiggle: JiggleSpec?,
         newInitialOffsetY: Int,
     ) {
         lookaheadScope = newScope
         isManualScrolling = newIsManualScrolling
         durationMillis = newDurationMillis
         delayMillis = newDelayMillis
+        jiggle = newJiggle
         initialOffsetY = newInitialOffsetY
         if (itemKey != newKey) {
             itemKey = newKey
@@ -141,6 +192,7 @@ private data class LinePlacementNodeElement(
     val isManualScrolling: Boolean,
     val durationMillis: Int,
     val delayMillis: Int,
+    val jiggle: JiggleSpec?,
     val initialOffsetY: Int,
 ) : ModifierNodeElement<LinePlacementModifierNode>() {
     override fun update(node: LinePlacementModifierNode) {
@@ -150,6 +202,7 @@ private data class LinePlacementNodeElement(
             isManualScrolling,
             durationMillis,
             delayMillis,
+            jiggle,
             initialOffsetY,
         )
     }
@@ -161,6 +214,7 @@ private data class LinePlacementNodeElement(
             isManualScrolling,
             durationMillis,
             delayMillis,
+            jiggle,
             initialOffsetY,
         )
 }
@@ -172,6 +226,7 @@ internal fun Modifier.linePlacement(
     isManualScrolling: Boolean,
     durationMillis: Int,
     delayMillis: Int,
+    jiggle: JiggleSpec? = null,
     initialOffsetY: Int = 0,
 ): Modifier =
     then(
@@ -181,6 +236,7 @@ internal fun Modifier.linePlacement(
             isManualScrolling = isManualScrolling,
             durationMillis = durationMillis,
             delayMillis = delayMillis,
+            jiggle = jiggle,
             initialOffsetY = initialOffsetY,
         ),
     )

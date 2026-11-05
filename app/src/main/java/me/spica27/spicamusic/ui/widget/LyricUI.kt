@@ -80,12 +80,14 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.LookaheadScope
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -105,6 +107,8 @@ import me.spica27.spicamusic.R
 import me.spica27.spicamusic.common.entity.LyricItem
 import me.spica27.spicamusic.common.entity.getSentenceContent
 import me.spica27.spicamusic.common.entity.voiceAgents
+import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
+import me.spica27.spicamusic.core.preferences.TransliterationPosition
 import me.spica27.spicamusic.ui.theme.Shapes
 import java.util.Locale
 import kotlin.math.abs
@@ -119,13 +123,15 @@ private object LyricUIConstants {
 
     const val SEEK_PREVIEW_END_PADDING = 16
 
-    const val INACTIVE_SCALE = 1f
+    /** Lines other than the current one sit at 95.5% scale, the current line at 100%. */
+    const val INACTIVE_SCALE = 0.955f
+    const val ACTIVE_SCALE = 1f
 
     // 行切换动效参数
 
     /** 位移时长随相邻行间隔在线性范围内变化。 */
-    const val LINE_MOVE_MIN_DURATION_MS = 480
-    const val LINE_MOVE_MAX_DURATION_MS = 750
+    /** Short gaps between lines shorten the move to this fraction of the Move to current line setting. */
+    const val LINE_MOVE_SHORT_GAP_FRACTION = 0.8f
     const val LINE_GAP_MIN_MS = 200L
     const val LINE_GAP_MAX_MS = 750L
 
@@ -143,19 +149,33 @@ private object LyricUIConstants {
     const val INACTIVE_ALPHA_DELAY_MS = 250
     const val INACTIVE_ALPHA_DURATION_MS = 350
 
-    const val EMPHASIS_FACTOR = 0.18f
-    const val MIN_EMPHASIS = 0.35f
+    /** Opacity of a non-current line when Unsung text opacity is at its default (50%). */
+    const val INACTIVE_LINE_ALPHA = 0.42f
+    const val UNSUNG_DEFAULT_PERCENT = 50f
+
+    /** Blur grows with the distance from the current line: 2.5 dp next to it, +1.2 dp per line, 6 dp at most. */
+    const val BLUR_FIRST_LINE_DP = 2.5f
+    const val BLUR_STEP_DP = 1.2f
     const val MAX_BLUR_RADIUS = 6f
 
-    const val SEEK_OVERLAY_HIDE_DELAY = 450L
+    /** Text sizes of the reference window (sp, before the size sliders). */
+    const val LYRICS_MIN_SP = 27f
+    const val LYRICS_MAX_SP = 36f
+    const val LYRICS_WIDTH_FRACTION = 0.08f
+    const val SECONDARY_SP = 17f
+    const val BG_TRANSLATION_SP = 15f
+    const val BG_VOCAL_EM = 0.6f
+    const val LYRICS_LINE_HEIGHT_EM = 1.17f
+    const val LYRICS_LETTER_SPACING_EM = -0.012f
+    const val LINE_PADDING_VERTICAL_DP = 9
+    const val LINE_SPACING_DP = 8
 
-    const val SCROLL_VIEWPORT_OFFSET_RATIO = 0.28f
+    const val SEEK_OVERLAY_HIDE_DELAY = 450L
 
     // 逐字扫描的已唱与未唱透明度
 
     /** 主句已唱不透明，未唱透明度为 0.21。 */
     const val WORD_SUNG_ALPHA = 1f
-    const val WORD_UNSUNG_ALPHA = 0.21f
 
     /** 逐字翻译和音译的已唱、未唱透明度。 */
     const val WORD_TRANSLATION_SUNG_ALPHA = 0.92f
@@ -237,6 +257,12 @@ private fun lineStaggerDelayMillis(distanceBelow: Int): Int {
     return (LyricUIConstants.LINE_STAGGER_UNIT_MS * 0.25f * (5f * n - n * (n + 1) / 2f)).roundToInt()
 }
 
+/** Delay of a jiggling line `distanceBelow` lines under the current one: grows per line, easing off for far lines. */
+private fun jiggleDelayMillis(
+    distanceBelow: Int,
+    delayBetweenLinesMs: Int,
+): Int = (delayBetweenLinesMs * 9f * (1f - kotlin.math.exp(-distanceBelow.coerceAtLeast(0) / 9f))).roundToInt()
+
 /** 记录行切换时机、时长及指定时刻的演唱行。 */
 private class LineTimeline private constructor(
     private val lines: List<LyricItem>,
@@ -246,6 +272,8 @@ private class LineTimeline private constructor(
     private val transitionStartsMs: LongArray,
     /** 前 i 行的最晚结束时刻，用于缩小扫描范围。 */
     private val maxEndPrefixMs: LongArray,
+    /** Move duration used when a line has no entry (the Move to current line setting). */
+    private val fallbackMs: Int,
 ) {
     /** 返回指定时刻对应的行，尚未开始时返回 Int.MAX_VALUE。 */
     fun indexAt(time: Long): Int {
@@ -253,7 +281,7 @@ private class LineTimeline private constructor(
         return if (index < 0) Int.MAX_VALUE else index
     }
 
-    fun durationAt(index: Int): Int = durationsMs.getOrElse(index) { LyricUIConstants.LINE_MOVE_MAX_DURATION_MS }
+    fun durationAt(index: Int): Int = durationsMs.getOrElse(index) { fallbackMs }
 
     /** 返回指定时刻正在演唱的逐字行，支持多行重叠。 */
     fun activeLinesAt(time: Long): Set<Int> {
@@ -268,7 +296,10 @@ private class LineTimeline private constructor(
     }
 
     companion object {
-        fun of(lines: List<LyricItem>): LineTimeline {
+        fun of(
+            lines: List<LyricItem>,
+            moveMs: Int,
+        ): LineTimeline {
             val durations = IntArray(lines.size)
             val starts = LongArray(lines.size)
             val maxEnds = LongArray(lines.size)
@@ -281,9 +312,9 @@ private class LineTimeline private constructor(
                     if (previousEnd ==
                         null
                     ) {
-                        LyricUIConstants.LINE_MOVE_MAX_DURATION_MS
+                        moveMs
                     } else {
-                        transitionDuration(line.time - previousEnd)
+                        transitionDuration(line.time - previousEnd, moveMs)
                     }
                 durations[index] = duration
                 starts[index] = line.time - duration
@@ -292,18 +323,21 @@ private class LineTimeline private constructor(
                 maxEnd = max(maxEnd, (line as? LyricItem.WordsLyric)?.endTime ?: Long.MIN_VALUE)
                 maxEnds[index] = maxEnd
             }
-            return LineTimeline(lines, durations, starts, maxEnds)
+            return LineTimeline(lines, durations, starts, maxEnds, moveMs)
         }
 
         /** 根据相邻行间隔计算位移时长。 */
-        private fun transitionDuration(gapMs: Long): Int {
+        private fun transitionDuration(
+            gapMs: Long,
+            moveMs: Int,
+        ): Int {
             val gap = gapMs.coerceIn(LyricUIConstants.LINE_GAP_MIN_MS, LyricUIConstants.LINE_GAP_MAX_MS)
             val fraction =
                 (gap - LyricUIConstants.LINE_GAP_MIN_MS).toFloat() /
                     (LyricUIConstants.LINE_GAP_MAX_MS - LyricUIConstants.LINE_GAP_MIN_MS)
             return lerp(
-                LyricUIConstants.LINE_MOVE_MIN_DURATION_MS.toFloat(),
-                LyricUIConstants.LINE_MOVE_MAX_DURATION_MS.toFloat(),
+                moveMs * LyricUIConstants.LINE_MOVE_SHORT_GAP_FRACTION,
+                moveMs.toFloat(),
                 fraction,
             ).roundToInt()
         }
@@ -382,53 +416,130 @@ private data class LyricsUIStyle(
     val phoneticTextStyle: TextStyle,
     val rubyTextStyle: TextStyle,
     val accompanimentTextStyle: TextStyle,
+    /** Translation under background vocals. */
+    val accompanimentTranslationTextStyle: TextStyle,
     val activeScale: Float,
     val itemSpacing: Dp,
     val horizontalPadding: Dp,
     val verticalPadding: Dp,
     /** 逐字扫描前沿的羽化宽度。 */
     val sweepFeather: Dp,
+    /** Transliteration above (true) or below (false) the lyric words. */
+    val transliterationOnTop: Boolean,
+    /** Per-word timed transliteration (true) or a plain static line (false). */
+    val attachTransliterationToWords: Boolean,
+    /** Unsung text opacity relative to its default (50% = 1.0). */
+    val unsungFactor: Float,
 )
 
 @Composable
-private fun rememberLyricsUIStyle(displayMode: LyricsDisplayMode): LyricsUIStyle {
+private fun rememberLyricsUIStyle(
+    displayMode: LyricsDisplayMode,
+    settings: LyricsStyleSettings,
+): LyricsUIStyle {
     val typography = MaterialTheme.typography
-    return remember(typography, displayMode) {
-        when (displayMode) {
-            LyricsDisplayMode.Fullscreen ->
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    return remember(typography, displayMode, settings, screenWidthDp) {
+        val built =
+            when (displayMode) {
+            LyricsDisplayMode.Fullscreen -> {
+                // Same sizes as the reference window: lyrics 8% of the width (27..36), the rest 17 / 15.
+                val lyricsSp =
+                    (screenWidthDp * LyricUIConstants.LYRICS_WIDTH_FRACTION)
+                        .coerceIn(LyricUIConstants.LYRICS_MIN_SP, LyricUIConstants.LYRICS_MAX_SP) *
+                        settings.lyricsSize / 100f
+                val weight = FontWeight(settings.lyricsWeight)
+                val lyricsStyle =
+                    typography.headlineMedium.copy(
+                        fontSize = lyricsSp.sp,
+                        fontWeight = weight,
+                        lineHeight = (lyricsSp * LyricUIConstants.LYRICS_LINE_HEIGHT_EM).sp,
+                        letterSpacing = (lyricsSp * LyricUIConstants.LYRICS_LETTER_SPACING_EM).sp,
+                    )
+                val secondary = typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
+                fun secondaryStyle(
+                    baseSp: Float,
+                    percent: Int,
+                ): TextStyle {
+                    val sp = baseSp * percent / 100f
+                    return secondary.copy(fontSize = sp.sp, lineHeight = (sp * 1.3f).sp)
+                }
+                // Lyric edge padding: clamp(16, 5.4% of width, 26); 16 dp already comes from the list itself.
+                val edgePad =
+                    (screenWidthDp * 0.054f).coerceIn(16f, 26f) - LyricUIConstants.SEEK_PREVIEW_END_PADDING
                 LyricsUIStyle(
-                    mainTextStyle = typography.headlineMedium,
-                    translationTextStyle = typography.titleMedium,
-                    wordsTextStyle = typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
-                    wordsTranslationTextStyle = typography.bodySmall,
-                    phoneticTextStyle = typography.bodySmall,
+                    mainTextStyle = lyricsStyle,
+                    translationTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.translationSize),
+                    wordsTextStyle = lyricsStyle,
+                    wordsTranslationTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.translationSize),
+                    phoneticTextStyle = secondaryStyle(LyricUIConstants.SECONDARY_SP, settings.transliterationSize),
                     rubyTextStyle = typography.labelSmall.copy(fontSize = 10.sp),
-                    accompanimentTextStyle = typography.titleMedium,
-                    activeScale = 1.12f,
-                    itemSpacing = 12.dp,
-                    horizontalPadding = 24.dp,
-                    verticalPadding = 16.dp,
+                    accompanimentTextStyle =
+                        lyricsStyle.copy(
+                            fontSize = (lyricsSp * LyricUIConstants.BG_VOCAL_EM).sp,
+                            lineHeight = (lyricsSp * LyricUIConstants.BG_VOCAL_EM * 1.2f).sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    accompanimentTranslationTextStyle =
+                        secondaryStyle(LyricUIConstants.BG_TRANSLATION_SP, settings.backgroundTranslationSize),
+                    activeScale = LyricUIConstants.ACTIVE_SCALE,
+                    itemSpacing = LyricUIConstants.LINE_SPACING_DP.dp,
+                    horizontalPadding = edgePad.coerceAtLeast(0f).dp,
+                    verticalPadding = LyricUIConstants.LINE_PADDING_VERTICAL_DP.dp,
                     sweepFeather = 30.dp,
+                    transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
+                    attachTransliterationToWords = settings.attachToWords,
+                    unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
                 )
+            }
 
-            LyricsDisplayMode.Compact ->
+            LyricsDisplayMode.Compact -> {
+                fun scaled(
+                    base: TextStyle,
+                    percent: Int,
+                ): TextStyle = base.copy(fontSize = base.fontSize * (percent / 100f))
                 LyricsUIStyle(
-                    mainTextStyle = typography.titleLarge,
-                    translationTextStyle = typography.bodyMedium,
-                    wordsTextStyle = typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
-                    wordsTranslationTextStyle = typography.bodySmall,
-                    phoneticTextStyle = typography.labelSmall,
+                    mainTextStyle = scaled(typography.titleLarge, settings.lyricsSize),
+                    translationTextStyle = scaled(typography.bodyMedium, settings.translationSize),
+                    wordsTextStyle =
+                        scaled(typography.titleLarge, settings.lyricsSize)
+                            .copy(fontWeight = FontWeight(settings.lyricsWeight)),
+                    wordsTranslationTextStyle = scaled(typography.bodySmall, settings.translationSize),
+                    phoneticTextStyle = scaled(typography.labelSmall, settings.transliterationSize),
                     rubyTextStyle = typography.labelSmall.copy(fontSize = 8.sp),
                     accompanimentTextStyle = typography.bodyMedium,
+                    accompanimentTranslationTextStyle = scaled(typography.bodySmall, settings.backgroundTranslationSize),
                     activeScale = 1.06f,
                     itemSpacing = 6.dp,
                     horizontalPadding = 16.dp,
                     verticalPadding = 8.dp,
                     sweepFeather = 18.dp,
+                    transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
+                    attachTransliterationToWords = settings.attachToWords,
+                    unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
                 )
-        }
+            }
+            }
+        built.withFontFamily(LyricsFontOption.lyricsFamily(settings.lyricsFont))
     }
 }
+
+/** Applies the lyrics font to every lyric text style (no-op when the lyrics follow the player font). */
+private fun LyricsUIStyle.withFontFamily(family: FontFamily?): LyricsUIStyle =
+    if (family == null) {
+        this
+    } else {
+        copy(
+            mainTextStyle = mainTextStyle.copy(fontFamily = family),
+            translationTextStyle = translationTextStyle.copy(fontFamily = family),
+            wordsTextStyle = wordsTextStyle.copy(fontFamily = family),
+            wordsTranslationTextStyle = wordsTranslationTextStyle.copy(fontFamily = family),
+            phoneticTextStyle = phoneticTextStyle.copy(fontFamily = family),
+            rubyTextStyle = rubyTextStyle.copy(fontFamily = family),
+            accompanimentTextStyle = accompanimentTextStyle.copy(fontFamily = family),
+            accompanimentTranslationTextStyle = accompanimentTranslationTextStyle.copy(fontFamily = family),
+        )
+    }
 
 // ==================== 主组件 ====================
 
@@ -440,6 +551,7 @@ fun LyricsUI(
     currentTimeProvider: () -> Long,
     displayMode: LyricsDisplayMode = LyricsDisplayMode.Fullscreen,
     displayOptions: LyricsDisplayOptions = LyricsDisplayOptions(),
+    styleSettings: LyricsStyleSettings = LyricsStyleSettings(),
     isSynced: Boolean = true,
     onSeekToTime: (Long) -> Unit = {},
 ) {
@@ -457,11 +569,12 @@ fun LyricsUI(
             lines = lyricLines,
             displayMode = displayMode,
             displayOptions = displayOptions,
+            styleSettings = styleSettings,
         )
         return
     }
 
-    val style = rememberLyricsUIStyle(displayMode)
+    val style = rememberLyricsUIStyle(displayMode, styleSettings)
     val lazyListState = rememberLazyListState()
     var isAutoScrolling by remember { mutableStateOf(false) }
     val isManualScrolling by remember {
@@ -480,7 +593,7 @@ fun LyricsUI(
             }
         }
     // 滚动按时间表提前开始，逐字高亮仍使用真实时间。
-    val timeline = remember(lyricLines) { LineTimeline.of(lyricLines) }
+    val timeline = remember(lyricLines, styleSettings.moveDurationMs) { LineTimeline.of(lyricLines, styleSettings.moveDurationMs) }
     val playingIndex by remember(timeline) {
         derivedStateOf { timeline.indexAt(currentTimeState.value) }
     }
@@ -542,9 +655,14 @@ fun LyricsUI(
             // 选择线位于视口中央，边缘歌词保留半个视口空白。
             val selectionPadding = with(density) { constraints.maxHeight.toDp() / 2 }
             val playbackAnchorOffsetPx =
-                constraints.maxHeight * LyricUIConstants.SCROLL_VIEWPORT_OFFSET_RATIO
+                constraints.maxHeight * (styleSettings.currentLinePosition / 100f)
             val bottomFlyInOffsetPx = with(density) { LyricUIConstants.BOTTOM_FLY_IN_OFFSET.roundToPx() }
             val keepAliveZone = LyricUIConstants.KEEP_ALIVE_ZONE
+            // Jiggle: lines below the current one spring into place (Lyrics settings > Jiggle effect).
+            val jiggleSpec =
+                remember(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs) {
+                    JiggleSpec(styleSettings.jiggleStrength, styleSettings.jiggleDurationMs)
+                }
             val keepAliveZonePx = with(density) { keepAliveZone.toPx() }
 
             LaunchedEffect(playingIndex, showSeekOverlay, lyricLines) {
@@ -609,7 +727,7 @@ fun LyricsUI(
                         index == highlightedIndex ||
                             (!showSeekOverlay && index in activeLineIndices)
                     val distanceFromActive = if (isActive) 0 else calculateDistance(index, highlightedIndex)
-                    val emphasis = calculateEmphasis(distanceFromActive)
+                    val lineAlpha = calculateLineAlpha(distanceFromActive, styleSettings.unsungOpacity)
                     // 动画值仅在图层绘制阶段读取，避免动画期间重组可见行。
                     val scaleState =
                         animateFloatAsState(
@@ -619,17 +737,22 @@ fun LyricsUI(
                         )
                     val alphaState =
                         animateFloatAsState(
-                            targetValue = emphasis,
+                            targetValue = lineAlpha,
                             label = "lyricAlpha",
                             animationSpec = if (distanceFromActive == 0) ActiveAlphaSpec else InactiveAlphaSpec,
                         )
-                    val blurRadius = ((1f - emphasis) * LyricUIConstants.MAX_BLUR_RADIUS).dp
+                    val blurRadius = calculateBlurDp(distanceFromActive, styleSettings.blur).dp
 
+                    val isBelowPlaying = playingIndex in lyricLines.indices && index > playingIndex
+                    val jiggleLine = styleSettings.jiggleEnabled && isBelowPlaying
                     val staggerDelayMillis =
-                        if (playingIndex in lyricLines.indices && index > playingIndex) {
-                            lineStaggerDelayMillis(index - playingIndex)
-                        } else {
-                            0
+                        when {
+                            // Each line waits a little longer than the one above it; the wait levels off for far lines.
+                            jiggleLine ->
+                                jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs)
+
+                            isBelowPlaying -> lineStaggerDelayMillis(index - playingIndex)
+                            else -> 0
                         }
                     val songPart = line.songPartLabel()
                     val previousSongPart = lyricLines.getOrNull(index - 1)?.songPartLabel()
@@ -644,6 +767,7 @@ fun LyricsUI(
                             isManualScrolling = isManualScrolling,
                             durationMillis = lineMoveDurationMillis,
                             delayMillis = staggerDelayMillis,
+                            jiggle = if (jiggleLine) jiggleSpec else null,
                             initialOffsetY =
                                 if (index > playingIndex) bottomFlyInOffsetPx else 0,
                         )
@@ -738,8 +862,9 @@ private fun PlainLyricsList(
     lines: List<LyricItem>,
     displayMode: LyricsDisplayMode,
     displayOptions: LyricsDisplayOptions,
+    styleSettings: LyricsStyleSettings,
 ) {
-    val style = rememberLyricsUIStyle(displayMode)
+    val style = rememberLyricsUIStyle(displayMode, styleSettings)
     val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -832,6 +957,20 @@ private fun LyricLine(
     val activeTextColor = voiceAccent ?: MaterialTheme.colorScheme.onSurface
     val horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
     val textAlign = if (alignEnd) TextAlign.End else TextAlign.Start
+    val phoneticBlock: @Composable () -> Unit = {
+        if (!lyric.phonetic.isNullOrBlank()) {
+            val onTop = style.transliterationOnTop
+            if (!onTop) Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = lyric.phonetic!!,
+                style = style.phoneticTextStyle,
+                color = (if (isActive) activeTextColor else inactiveTextColor).copy(alpha = 0.72f),
+                textAlign = textAlign,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (onTop) Spacer(modifier = Modifier.height(2.dp))
+        }
+    }
     val blurEffect = rememberLineBlurEffect(blurRadius)
 
     Column(
@@ -865,6 +1004,8 @@ private fun LyricLine(
             Spacer(modifier = Modifier.height(4.dp))
         }
 
+        if (style.transliterationOnTop) phoneticBlock()
+
         Text(
             text = lyric.content.ifBlank { LyricUIConstants.EMPTY_WORD_PLACEHOLDER },
             style = style.mainTextStyle,
@@ -880,7 +1021,7 @@ private fun LyricLine(
                 displayOptions.preferredTranslationLanguage,
             )
         translations.forEach { translation ->
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             Text(
                 text = translation.content,
                 style = style.translationTextStyle,
@@ -895,16 +1036,7 @@ private fun LyricLine(
             )
         }
 
-        if (!lyric.phonetic.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = lyric.phonetic!!,
-                style = style.phoneticTextStyle,
-                color = (if (isActive) activeTextColor else inactiveTextColor).copy(alpha = 0.72f),
-                textAlign = textAlign,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        if (!style.transliterationOnTop) phoneticBlock()
     }
 }
 
@@ -1135,9 +1267,10 @@ private fun DrawScope.drawSweepMasks(
     val litFraction = registry.litFraction.value
     for (block in registry.blocks) {
         val sweep = block.sweep.value
-        val dimColor = Color.Black.copy(alpha = block.dimAlpha)
-        // 已唱侧在未唱透明度和不透明之间插值。
-        val litAlpha = block.dimAlpha + (1f - block.dimAlpha) * litFraction
+        // A line that is not current shows every word at full strength (the line's own opacity dims it).
+        // The current line dims only its not-yet-sung words, down to the Unsung text opacity.
+        val dimColor = Color.Black.copy(alpha = 1f - (1f - block.dimAlpha) * litFraction)
+        val litAlpha = 1f
         val litColor = Color.Black.copy(alpha = litAlpha)
         val wordCount = block.wordCoordinates.size
         var rowStart = 0
@@ -1304,6 +1437,47 @@ private fun WordsLyricLine(
         )
     // 整行在同一个离屏图层中完成透明度、缩放、模糊和扫描。
     val maskRegistry = remember(litFractionState) { SweepMaskRegistry(litFractionState) }
+    val transliterations =
+        lyric.transliterations.visibleTransliterations(
+            displayOptions.transliterationMode,
+            displayOptions.preferredTransliterationLanguage,
+        )
+    // Transliteration sits under the words by default, or above them (Top).
+    val transliterationBlock: @Composable () -> Unit = {
+        val onTop = style.transliterationOnTop
+        if (transliterations.isNotEmpty()) {
+            transliterations.forEach { transliteration ->
+                if (!onTop) Spacer(modifier = Modifier.height(2.dp))
+                TranslationLine(
+                    translation = transliteration,
+                    currentTimeState = currentTimeState,
+                    style = style,
+                    color = transliterationColor,
+                    sungAlpha = LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA,
+                    unsungAlpha =
+                        (LyricUIConstants.WORD_TRANSLITERATION_UNSUNG_ALPHA * style.unsungFactor)
+                            .coerceIn(0f, LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA),
+                    textAlign = textAlign,
+                    maskRegistry = maskRegistry,
+                    textMeasurer = textMeasurer,
+                    displayOptions = displayOptions,
+                    textStyle = style.phoneticTextStyle,
+                    timed = style.attachTransliterationToWords,
+                )
+                if (onTop) Spacer(modifier = Modifier.height(2.dp))
+            }
+        } else if (!lyric.phonetic.isNullOrBlank()) {
+            if (!onTop) Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = lyric.phonetic!!,
+                style = style.phoneticTextStyle,
+                color = transliterationColor,
+                textAlign = textAlign,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (onTop) Spacer(modifier = Modifier.height(2.dp))
+        }
+    }
     val blurEffect = rememberLineBlurEffect(blurRadius)
     val sweepFeatherPx = with(LocalDensity.current) { style.sweepFeather.toPx() }
     Column(
@@ -1357,6 +1531,8 @@ private fun WordsLyricLine(
             )
         }
 
+        if (style.transliterationOnTop) transliterationBlock()
+
         if (sentence.isNotBlank()) {
             ProgressiveWordsText(
                 text = sentence,
@@ -1365,7 +1541,7 @@ private fun WordsLyricLine(
                 textStyle = style.wordsTextStyle,
                 color = textColor,
                 sungAlpha = LyricUIConstants.WORD_SUNG_ALPHA,
-                unsungAlpha = LyricUIConstants.WORD_UNSUNG_ALPHA,
+                unsungAlpha = (LyricUIConstants.INACTIVE_LINE_ALPHA * style.unsungFactor).coerceIn(0f, 1f),
                 maskRegistry = maskRegistry,
                 textMeasurer = textMeasurer,
                 modifier = Modifier.fillMaxWidth(),
@@ -1376,38 +1552,7 @@ private fun WordsLyricLine(
             )
         }
 
-        val transliterations =
-            lyric.transliterations.visibleTransliterations(
-                displayOptions.transliterationMode,
-                displayOptions.preferredTransliterationLanguage,
-            )
-        if (transliterations.isNotEmpty()) {
-            transliterations.forEach { transliteration ->
-                Spacer(modifier = Modifier.height(4.dp))
-                TranslationLine(
-                    translation = transliteration,
-                    currentTimeState = currentTimeState,
-                    style = style,
-                    color = transliterationColor,
-                    sungAlpha = LyricUIConstants.WORD_TRANSLITERATION_SUNG_ALPHA,
-                    unsungAlpha = LyricUIConstants.WORD_TRANSLITERATION_UNSUNG_ALPHA,
-                    textAlign = textAlign,
-                    maskRegistry = maskRegistry,
-                    textMeasurer = textMeasurer,
-                    displayOptions = displayOptions,
-                    textStyle = style.phoneticTextStyle,
-                )
-            }
-        } else if (!lyric.phonetic.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = lyric.phonetic!!,
-                style = style.phoneticTextStyle,
-                color = transliterationColor,
-                textAlign = textAlign,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        if (!style.transliterationOnTop) transliterationBlock()
 
         val translations =
             lyric.translationVariantsFor(
@@ -1415,14 +1560,16 @@ private fun WordsLyricLine(
                 displayOptions.preferredTranslationLanguage,
             )
         translations.forEach { translation ->
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             TranslationLine(
                 translation = translation,
                 currentTimeState = currentTimeState,
                 style = style,
                 color = translationColor,
                 sungAlpha = LyricUIConstants.WORD_TRANSLATION_SUNG_ALPHA,
-                unsungAlpha = LyricUIConstants.WORD_TRANSLATION_UNSUNG_ALPHA,
+                unsungAlpha =
+                    (LyricUIConstants.WORD_TRANSLATION_UNSUNG_ALPHA * style.unsungFactor)
+                        .coerceIn(0f, LyricUIConstants.WORD_TRANSLATION_SUNG_ALPHA),
                 textAlign = textAlign,
                 maskRegistry = maskRegistry,
                 textMeasurer = textMeasurer,
@@ -1645,6 +1792,8 @@ private fun TranslationLine(
     textMeasurer: TextMeasurer,
     displayOptions: LyricsDisplayOptions,
     textStyle: TextStyle = style.wordsTranslationTextStyle,
+    /** False draws the line as plain static text instead of timing it word by word. */
+    timed: Boolean = true,
 ) {
     val words =
         remember(translation, displayOptions.obscureObscene) {
@@ -1657,7 +1806,7 @@ private fun TranslationLine(
         remember(translation, words) {
             words.joinToString(separator = "") { it.content }.ifBlank { translation.content }
         }
-    if (words.isNotEmpty()) {
+    if (words.isNotEmpty() && timed) {
         ProgressiveWordsText(
             text = text,
             words = words,
@@ -1853,6 +2002,7 @@ private fun AccompanimentLine(
                     maskRegistry = maskRegistry,
                     textMeasurer = textMeasurer,
                     displayOptions = displayOptions,
+                    textStyle = style.accompanimentTranslationTextStyle,
                 )
             }
         }
@@ -2324,9 +2474,27 @@ private fun calculateDistance(
         abs(index - highlightedIndex)
     }
 
-/** 根据距离计算透明度和模糊程度。 */
-private fun calculateEmphasis(distance: Int): Float =
-    (1f - distance * LyricUIConstants.EMPHASIS_FACTOR).coerceIn(
-        LyricUIConstants.MIN_EMPHASIS,
-        1f,
-    )
+/** Opacity of a line: the current line is fully visible, every other line uses the Unsung text opacity. */
+private fun calculateLineAlpha(
+    distance: Int,
+    unsungPercent: Int,
+): Float =
+    if (distance == 0) {
+        1f
+    } else {
+        (LyricUIConstants.INACTIVE_LINE_ALPHA * unsungPercent / LyricUIConstants.UNSUNG_DEFAULT_PERCENT)
+            .coerceIn(0f, 1f)
+    }
+
+/** Blur of a line in dp: none on the current line, then 2.5 dp growing by 1.2 dp per line up to 6 dp, scaled by the Blur slider. */
+private fun calculateBlurDp(
+    distance: Int,
+    blurPercent: Int,
+): Float {
+    if (distance == 0 || blurPercent <= 0) return 0f
+    val steps = (distance - 1).coerceAtLeast(0).coerceAtMost(10)
+    val base =
+        (LyricUIConstants.BLUR_FIRST_LINE_DP + steps * LyricUIConstants.BLUR_STEP_DP)
+            .coerceAtMost(LyricUIConstants.MAX_BLUR_RADIUS)
+    return base * blurPercent / 100f
+}

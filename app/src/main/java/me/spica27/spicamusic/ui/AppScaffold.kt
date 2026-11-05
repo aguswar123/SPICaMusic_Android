@@ -20,6 +20,7 @@ import com.skydoves.landscapist.core.Landscapist
 import com.skydoves.landscapist.image.LocalLandscapist
 import dev.chrisbanes.haze.rememberHazeState
 import me.spica27.spicamusic.common.entity.ThemeColorStyle
+import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
 import me.spica27.spicamusic.core.preferences.PreferencesManager
 import me.spica27.spicamusic.ui.adaptive.LocalPaneInfo
 import me.spica27.spicamusic.ui.adaptive.LocalShellInsets
@@ -39,6 +40,7 @@ import me.spica27.spicamusic.ui.navigation.rememberAppNavigator
 import me.spica27.spicamusic.ui.player.LocalPlayerViewModel
 import me.spica27.spicamusic.ui.player.PlayerViewModel
 import me.spica27.spicamusic.ui.theme.SPICaMusicTheme
+import me.spica27.spicamusic.ui.widget.LyricsFontOption
 import me.spica27.spicamusic.utils.Nav3Transitions
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinActivityViewModel
@@ -62,6 +64,7 @@ fun AppScaffold() {
             .getString(PreferencesManager.Keys.THEME_COLOR_STYLE, ThemeColorStyle.Textured.value)
             .collectAsStateWithLifecycle(ThemeColorStyle.Textured.value)
 
+    val lyricsStyle by preferencesManager.lyricsStyle.collectAsStateWithLifecycle(LyricsStyleSettings())
     val playerViewModel: PlayerViewModel = koinActivityViewModel()
     val color by playerViewModel.playerThemeColor.collectAsStateWithLifecycle()
     val keepScreenOn by
@@ -97,6 +100,7 @@ fun AppScaffold() {
         darkTheme = isDarkMode,
         themeColor = color,
         themeColorStyle = ThemeColorStyle.fromString(themeColorStyleValue),
+        fontFamily = LyricsFontOption.fromId(lyricsStyle.fontStyle).family,
     ) {
         CompositionLocalProvider(
             LocalLiquidGlassConfig provides LiquidGlassConfig(enabled = liquidGlassEnabled),
