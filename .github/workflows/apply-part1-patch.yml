@@ -1,0 +1,21 @@
+name: Apply part 1 patch
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          git apply --whitespace=nowarn part1.patch
+          git rm -q --cached part1.patch
+          rm part1.patch
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Add break dots and background vocal open (part 1)"
+          git push
