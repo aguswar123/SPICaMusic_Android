@@ -1,0 +1,468 @@
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricInterludes.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricInterludes.kt
+new file mode 100644
+index 0000000..2f3480b
+--- /dev/null
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricInterludes.kt
+@@ -0,0 +1,239 @@
++package me.spica27.spicamusic.ui.widget
++
++import androidx.compose.animation.AnimatedContent
++import androidx.compose.animation.SizeTransform
++import androidx.compose.animation.core.CubicBezierEasing
++import androidx.compose.animation.core.FastOutSlowInEasing
++import androidx.compose.animation.core.RepeatMode
++import androidx.compose.animation.core.StartOffset
++import androidx.compose.animation.core.animateFloat
++import androidx.compose.animation.core.infiniteRepeatable
++import androidx.compose.animation.core.rememberInfiniteTransition
++import androidx.compose.animation.core.tween
++import androidx.compose.animation.fadeIn
++import androidx.compose.animation.fadeOut
++import androidx.compose.animation.scaleIn
++import androidx.compose.animation.scaleOut
++import androidx.compose.animation.slideInVertically
++import androidx.compose.animation.slideOutVertically
++import androidx.compose.animation.togetherWith
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.State
++import androidx.compose.runtime.derivedStateOf
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.graphics.BlurEffect
++import androidx.compose.ui.graphics.TileMode
++import androidx.compose.ui.graphics.TransformOrigin
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.platform.LocalDensity
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import me.spica27.spicamusic.common.entity.LyricItem
++import kotlin.math.ceil
++import kotlin.math.max
++
++/*
++ * Break line ("interlude"): three dots and a countdown, shown for a long intro or a long instrumental gap.
++ * Same rules as the reference window:
++ *  - the song starts with 5 s or more before the first lyric, or
++ *  - two lines are 7 s or more apart.
++ * The break starts when the previous line ends and finishes 0.3 s before the next line starts.
++ */
++
++internal const val INTERLUDE_KEY_PREFIX = "~interlude~"
++private const val INTRO_MIN_MS = 5000L
++private const val BREAK_MIN_MS = 7000L
++private const val INTERLUDE_LEAD_MS = 300L
++
++private val InterludeEase = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
++
++/** True for the break lines created by [insertInterludes]. */
++internal fun LyricItem.isInterlude(): Boolean = this is LyricItem.NormalLyric && key.startsWith(INTERLUDE_KEY_PREFIX)
++
++/** End of a break line in ms (it ends 0.3 s before the next lyric starts). */
++internal fun LyricItem.interludeEndMs(): Long = (this as? LyricItem.NormalLyric)?.translation?.toLongOrNull() ?: time
++
++private fun LyricItem.knownEndMs(): Long? =
++    (this as? LyricItem.WordsLyric)?.let { words ->
++        max(words.endTime, words.accompaniment.maxOfOrNull { it.endTime } ?: words.endTime)
++    }
++
++private fun interludeItem(
++    startMs: Long,
++    endMs: Long,
++    index: Int,
++): LyricItem =
++    LyricItem.NormalLyric(
++        content = "",
++        translation = endMs.toString(),
++        time = startMs,
++        key = "$INTERLUDE_KEY_PREFIX$index",
++    )
++
++/** Inserts break lines into a time-sorted lyric list. Only used for time-synced lyrics. */
++internal fun insertInterludes(lines: List<LyricItem>): List<LyricItem> {
++    if (lines.isEmpty()) return lines
++    val result = ArrayList<LyricItem>(lines.size + 4)
++    val first = lines.first()
++    if (first.time >= INTRO_MIN_MS) {
++        result += interludeItem(0L, first.time - INTERLUDE_LEAD_MS, result.size)
++    }
++    lines.forEachIndexed { i, line ->
++        result += line
++        val next = lines.getOrNull(i + 1) ?: return@forEachIndexed
++        val end = line.knownEndMs() ?: return@forEachIndexed
++        if (next.time - end >= BREAK_MIN_MS) {
++            result += interludeItem(end, next.time - INTERLUDE_LEAD_MS, result.size)
++        }
++    }
++    return result
++}
++
++/**
++ * Draws a break line. The dots fill one by one as the break goes by and breathe while it is current;
++ * the number counts down the whole seconds until the next line, and rolls up into place on every change.
++ */
++@Composable
++internal fun InterludeLine(
++    startMs: Long,
++    endMs: Long,
++    currentTimeState: State<Long>,
++    isActive: Boolean,
++    alphaProvider: () -> Float,
++    scaleProvider: () -> Float,
++    blurRadius: Dp,
++    horizontalPadding: Dp,
++    verticalPadding: Dp,
++    modifier: Modifier = Modifier,
++) {
++    val density = LocalDensity.current
++    val color = MaterialTheme.colorScheme.onSurface
++    val blurEffect =
++        remember(blurRadius, density) {
++            val px = with(density) { blurRadius.toPx() }
++            if (px > 0f) BlurEffect(px, px, TileMode.Decal) else null
++        }
++
++    val nextStartMs = endMs + INTERLUDE_LEAD_MS
++    val fullSeconds = max(1, ceil((nextStartMs - startMs) / 1000.0).toInt())
++    // Whole seconds until the next line; a finished or waiting break shows its full length again.
++    val count by remember(startMs, endMs, isActive) {
++        derivedStateOf {
++            if (isActive) {
++                max(1, ceil((nextStartMs - currentTimeState.value) / 1000.0).toInt()).coerceAtMost(fullSeconds)
++            } else {
++                fullSeconds
++            }
++        }
++    }
++
++    // The dots breathe one after another while nobody sings (scale 1 -> 1.32, 2.4 s loop, 0.26 s apart).
++    val breath = rememberInfiniteTransition(label = "interludeBreath")
++    val scales =
++        List(3) { i ->
++            breath.animateFloat(
++                initialValue = 1f,
++                targetValue = 1.32f,
++                animationSpec =
++                    infiniteRepeatable(
++                        animation = tween(1200, easing = FastOutSlowInEasing),
++                        repeatMode = RepeatMode.Reverse,
++                        initialStartOffset = StartOffset(i * 260),
++                    ),
++                label = "interludeDot$i",
++            )
++        }
++
++    val dot = 14.dp
++    val dotGap = 9.dp
++    val rollOffsetPx = with(density) { 9.dp.roundToPx() }
++
++    Row(
++        verticalAlignment = Alignment.CenterVertically,
++        modifier =
++            modifier
++                .fillMaxWidth()
++                .graphicsLayer {
++                    this.alpha = alphaProvider()
++                    val scale = scaleProvider()
++                    scaleX = scale
++                    scaleY = scale
++                    transformOrigin =
++                        TransformOrigin(
++                            pivotFractionX = if (size.width > 0f) horizontalPadding.toPx() / size.width else 0f,
++                            pivotFractionY = 0.5f,
++                        )
++                    renderEffect = blurEffect
++                }.padding(horizontal = horizontalPadding, vertical = verticalPadding),
++    ) {
++        Canvas(modifier = Modifier.size(width = dot * 3 + dotGap * 2, height = dot)) {
++            val diameter = dot.toPx()
++            val radius = diameter / 2f
++            val step = diameter + dotGap.toPx()
++            // How far through the break we are (0..1); the dots light up one third at a time.
++            val progress =
++                if (isActive) {
++                    ((currentTimeState.value - startMs).toFloat() / max(100L, endMs - startMs).toFloat())
++                        .coerceIn(0f, 1f)
++                } else {
++                    0f
++                }
++            for (i in 0..2) {
++                val lit = (progress * 3f - i).coerceIn(0f, 1f)
++                val dotScale = if (isActive) scales[i].value else 1f
++                drawCircle(
++                    color = color.copy(alpha = 0.28f + 0.72f * lit),
++                    radius = radius * dotScale,
++                    center = Offset(radius + i * step, size.height / 2f),
++                )
++            }
++        }
++        Spacer(modifier = Modifier.width(dotGap + 7.dp))
++        AnimatedContent(
++            targetState = count,
++            transitionSpec = {
++                (
++                    fadeIn(tween(600, easing = InterludeEase)) +
++                        slideInVertically(tween(600, easing = InterludeEase)) { rollOffsetPx } +
++                        scaleIn(tween(600, easing = InterludeEase), initialScale = 0.9f)
++                ) togetherWith
++                    (
++                        fadeOut(tween(450, easing = InterludeEase)) +
++                            slideOutVertically(tween(450, easing = InterludeEase)) { -rollOffsetPx } +
++                            scaleOut(tween(450, easing = InterludeEase), targetScale = 0.9f)
++                    ) using SizeTransform(clip = false)
++            },
++            contentAlignment = Alignment.CenterStart,
++            label = "interludeCount",
++            modifier = Modifier.widthIn(min = 26.dp),
++        ) { seconds ->
++            Text(
++                text = seconds.toString(),
++                color = color,
++                style =
++                    TextStyle(
++                        fontSize = 16.sp,
++                        fontWeight = FontWeight.SemiBold,
++                        fontFeatureSettings = "tnum",
++                    ),
++            )
++        }
++    }
++}
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
+index 189a81b..f394ea8 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
+@@ -2,6 +2,8 @@ package me.spica27.spicamusic.ui.widget
+ 
+ import androidx.compose.animation.AnimatedVisibility
+ import androidx.compose.animation.core.CubicBezierEasing
++import androidx.compose.animation.core.EnterExitState
++import androidx.compose.animation.core.animateFloat
+ import androidx.compose.animation.core.animateFloatAsState
+ import androidx.compose.animation.core.tween
+ import androidx.compose.animation.expandVertically
+@@ -211,7 +213,9 @@ private object LyricUIConstants {
+     const val SLOW_WORD_MAX_SCALE_INCREASE = 0.1f
+     const val SLOW_WORD_MAX_DIP = 0.5f
+     const val SLOW_WORD_MAX_FLOAT_OFFSET_PX = 4f
+-    const val ACCOMPANIMENT_VISIBILITY_PADDING_MS = 600L
++    /** A background vocal opens this long before it is sung (or together with the line if it starts almost with it). */
++    const val ACCOMPANIMENT_OPEN_LEAD_MS = 500L
++    const val ACCOMPANIMENT_OPEN_BLUR_DP = 10f
+     const val ACCOMPANIMENT_ANIMATION_DURATION_MS = 480
+ 
+     /** 底部新歌词的初始下移距离。 */
+@@ -535,9 +539,9 @@ fun LyricsUI(
+     isSynced: Boolean = true,
+     onSeekToTime: (Long) -> Unit = {},
+ ) {
+-    val lyricLines = remember(lyric) { lyric.sortedBy { it.time } }
++    val sortedLines = remember(lyric) { lyric.sortedBy { it.time } }
+ 
+-    if (lyricLines.isEmpty()) {
++    if (sortedLines.isEmpty()) {
+         EmptyLyricState(modifier)
+         return
+     }
+@@ -546,7 +550,7 @@ fun LyricsUI(
+     if (!isSynced) {
+         PlainLyricsList(
+             modifier = modifier,
+-            lines = lyricLines,
++            lines = sortedLines,
+             displayMode = displayMode,
+             displayOptions = displayOptions,
+             styleSettings = styleSettings,
+@@ -554,6 +558,8 @@ fun LyricsUI(
+         return
+     }
+ 
++    // Long intros and instrumental gaps get a break line (three dots and a countdown).
++    val lyricLines = remember(sortedLines) { insertInterludes(sortedLines) }
+     val style = rememberLyricsUIStyle(displayMode, styleSettings)
+     val lazyListState = rememberLazyListState()
+     var isAutoScrolling by remember { mutableStateOf(false) }
+@@ -701,7 +707,7 @@ fun LyricsUI(
+                 itemsIndexed(
+                     items = lyricLines,
+                     key = { _, line -> line.key },
+-                    contentType = { _, line -> line::class },
++                    contentType = { _, line -> if (line.isInterlude()) "interlude" else line::class },
+                 ) { index, line ->
+                     val isActive =
+                         index == highlightedIndex ||
+@@ -734,7 +740,11 @@ fun LyricsUI(
+                     val staggerDelayMillis =
+                         if (jiggleLine) jiggleDelayMillis(index - playingIndex, styleSettings.jiggleDelayMs) else 0
+                     val songPart = line.songPartLabel()
+-                    val previousSongPart = lyricLines.getOrNull(index - 1)?.songPartLabel()
++                    val previousRealLine =
++                        lyricLines.getOrNull(index - 1).let { previous ->
++                            if (previous?.isInterlude() == true) lyricLines.getOrNull(index - 2) else previous
++                        }
++                    val previousSongPart = previousRealLine?.songPartLabel()
+                     val showSongPart =
+                         displayOptions.showSongPart &&
+                             !songPart.isNullOrBlank() &&
+@@ -751,6 +761,22 @@ fun LyricsUI(
+                                 if (index > playingIndex) bottomFlyInOffsetPx else 0,
+                         )
+ 
++                    if (line.isInterlude()) {
++                        InterludeLine(
++                            startMs = line.time,
++                            endMs = line.interludeEndMs(),
++                            currentTimeState = currentTimeState,
++                            isActive = index == highlightedIndex,
++                            alphaProvider = { alphaState.value },
++                            scaleProvider = { scaleState.value },
++                            blurRadius = blurRadius.dp,
++                            horizontalPadding = style.horizontalPadding,
++                            verticalPadding = style.verticalPadding + 5.dp,
++                            modifier = placementModifier,
++                        )
++                        return@itemsIndexed
++                    }
++
+                     val lineAgents = line.voiceAgents()
+                     val lineVoiceIndex = lineAgents.firstOrNull()?.id?.let(voiceIndexById::get)
+                     val lineAccent =
+@@ -1496,6 +1522,7 @@ private fun WordsLyricLine(
+         beforeAccompaniment.forEach { background ->
+             AccompanimentLine(
+                 background = background,
++                openAtMs = accompanimentOpenAtMs(background, lyric),
+                 currentTimeState = currentTimeState,
+                 litFraction = litFractionState,
+                 placement = AccompanimentPlacement.Before,
+@@ -1559,6 +1586,7 @@ private fun WordsLyricLine(
+         afterAccompaniment.forEach { background ->
+             AccompanimentLine(
+                 background = background,
++                openAtMs = accompanimentOpenAtMs(background, lyric),
+                 currentTimeState = currentTimeState,
+                 litFraction = litFractionState,
+                 placement = AccompanimentPlacement.After,
+@@ -1575,6 +1603,16 @@ private fun WordsLyricLine(
+     }
+ }
+ 
++/** When a background vocal opens: shortly before it starts, or with the line when it starts almost with the main lyric. */
++private fun accompanimentOpenAtMs(
++    background: LyricItem.WordsLyric.AccompanimentLyric,
++    lyric: LyricItem.WordsLyric,
++): Long {
++    val mainStart = lyric.words.firstOrNull()?.startTime ?: lyric.startTime
++    val startsWithMain = abs(background.startTime - mainStart) <= LyricUIConstants.ACCOMPANIMENT_OPEN_LEAD_MS
++    return if (startsWithMain) lyric.startTime else background.startTime - LyricUIConstants.ACCOMPANIMENT_OPEN_LEAD_MS
++}
++
+ private enum class AccompanimentPlacement {
+     Before,
+     After,
+@@ -1817,6 +1855,7 @@ private fun TranslationLine(
+ @Composable
+ private fun AccompanimentLine(
+     background: LyricItem.WordsLyric.AccompanimentLyric,
++    openAtMs: Long,
+     currentTimeState: State<Long>,
+     litFraction: State<Float>,
+     placement: AccompanimentPlacement,
+@@ -1845,15 +1884,11 @@ private fun AccompanimentLine(
+         }
+     if (words.isEmpty()) return
+ 
+-    val visible by remember(background, currentTimeState) {
+-        derivedStateOf {
+-            val currentTime = currentTimeState.value
+-            currentTime >= background.startTime - LyricUIConstants.ACCOMPANIMENT_VISIBILITY_PADDING_MS &&
+-                currentTime <= background.endTime + LyricUIConstants.ACCOMPANIMENT_VISIBILITY_PADDING_MS
+-        }
++    // A background vocal opens once (just before it is sung) and then stays open;
++    // it only folds away again if you seek back to before it.
++    val visible by remember(openAtMs, currentTimeState) {
++        derivedStateOf { currentTimeState.value >= openAtMs }
+     }
+-    val pivotX = if (alignEnd) 1f else 0f
+-    val pivotY = if (placement == AccompanimentPlacement.Before) 0f else 1f
+     val alignment = if (placement == AccompanimentPlacement.Before) Alignment.Top else Alignment.Bottom
+ 
+     // 伴唱动画可能覆盖主句和翻译，因此使用独立离屏宿主承载蒙版。
+@@ -1863,44 +1898,32 @@ private fun AccompanimentLine(
+     AnimatedVisibility(
+         visible = visible,
+         modifier = Modifier.fillMaxWidth(),
++        // Opens over 1 s (height), 0.8 s (fade) and comes into focus from a 10 dp blur.
+         enter =
+-            fadeIn(tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS)) +
+-                scaleIn(
+-                    initialScale = 0.88f,
+-                    transformOrigin = TransformOrigin(pivotX, pivotY),
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ) +
+-                slideInVertically(
+-                    initialOffsetY = { height -> if (placement == AccompanimentPlacement.Before) -height / 3 else height / 3 },
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ) +
+-                expandVertically(
+-                    expandFrom = alignment,
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ),
++            expandVertically(
++                expandFrom = alignment,
++                animationSpec = tween(1000, easing = LyricLineScaleEasing),
++            ) + fadeIn(tween(800)),
+         exit =
+-            fadeOut(tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS)) +
+-                scaleOut(
+-                    targetScale = 0.88f,
+-                    transformOrigin = TransformOrigin(pivotX, pivotY),
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ) +
+-                slideOutVertically(
+-                    targetOffsetY = { height -> if (placement == AccompanimentPlacement.Before) -height / 3 else height / 3 },
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ) +
+-                shrinkVertically(
+-                    shrinkTowards = alignment,
+-                    animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_ANIMATION_DURATION_MS),
+-                ),
++            shrinkVertically(
++                shrinkTowards = alignment,
++                animationSpec = tween(400, easing = LyricLineScaleEasing),
++            ) + fadeOut(tween(300)),
+     ) {
++        val openBlurDp by transition.animateFloat(
++            transitionSpec = { tween(1000, easing = LyricLineScaleEasing) },
++            label = "accompanimentBlur",
++        ) { state -> if (state == EnterExitState.Visible) 0f else LyricUIConstants.ACCOMPANIMENT_OPEN_BLUR_DP }
+         Column(
+             horizontalAlignment = horizontalAlignment,
+             modifier =
+                 Modifier
+                     .fillMaxWidth()
+-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+-                    .sweepMaskHost(maskRegistry, sweepFeatherPx),
++                    .graphicsLayer {
++                        compositingStrategy = CompositingStrategy.Offscreen
++                        val blurPx = openBlurDp.dp.toPx()
++                        renderEffect = if (blurPx > 0f) BlurEffect(blurPx, blurPx, TileMode.Decal) else null
++                    }.sweepMaskHost(maskRegistry, sweepFeatherPx),
+         ) {
+             if (displayOptions.showAgentLabel && backgroundAgents.hasUsefulLabels()) {
+                 LineContextLabel(

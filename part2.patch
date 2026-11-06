@@ -1,0 +1,343 @@
+diff --git a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
+index f394ea8..0abf67c 100644
+--- a/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
++++ b/app/src/main/java/me/spica27/spicamusic/ui/widget/LyricUI.kt
+@@ -186,9 +186,10 @@ private object LyricUIConstants {
+     const val WORD_TRANSLITERATION_UNSUNG_ALPHA = 0.50f
+ 
+     /** 伴唱透明度较低，作为背景声部显示。 */
+-    const val ACCOMPANIMENT_SUNG_ALPHA = 0.35f
++    /** Background vocals use the main lyric colour at 85% (their translation at 70%), like the reference window. */
++    const val ACCOMPANIMENT_SUNG_ALPHA = 0.85f
+     const val ACCOMPANIMENT_UNSUNG_ALPHA = 0.18f
+-    const val ACCOMPANIMENT_SECONDARY_SUNG_ALPHA = 0.30f
++    const val ACCOMPANIMENT_SECONDARY_SUNG_ALPHA = 0.70f
+     const val ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA = 0.16f
+ 
+     /** 无逐字时间轴的翻译和音译透明度。 */
+@@ -414,6 +415,8 @@ private data class LyricsUIStyle(
+     val attachTransliterationToWords: Boolean,
+     /** Unsung text opacity relative to its default (50% = 1.0). */
+     val unsungFactor: Float,
++    /** Romanization drawn above or below each word (Attach to words): 0.4em of the lyric size. */
++    val attachedTransliterationTextStyle: TextStyle,
+ )
+ 
+ @Composable
+@@ -474,6 +477,11 @@ private fun rememberLyricsUIStyle(
+                     transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
+                     attachTransliterationToWords = settings.attachToWords,
+                     unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
++                    attachedTransliterationTextStyle =
++                        run {
++                            val sp = max(10f, lyricsSp * 0.4f * settings.transliterationSize / 100f)
++                            secondary.copy(fontSize = sp.sp, lineHeight = (sp * 1.2f).sp, letterSpacing = 0.sp)
++                        },
+                 )
+             }
+ 
+@@ -501,6 +509,16 @@ private fun rememberLyricsUIStyle(
+                     transliterationOnTop = settings.transliterationPosition == TransliterationPosition.Top,
+                     attachTransliterationToWords = settings.attachToWords,
+                     unsungFactor = settings.unsungOpacity / LyricUIConstants.UNSUNG_DEFAULT_PERCENT,
++                    attachedTransliterationTextStyle =
++                        run {
++                            val sp =
++                                max(
++                                    8f,
++                                    typography.titleLarge.fontSize.value * 0.4f *
++                                        settings.transliterationSize / 100f * settings.lyricsSize / 100f,
++                                )
++                            typography.labelSmall.copy(fontSize = sp.sp, lineHeight = (sp * 1.2f).sp)
++                        },
+                 )
+             }
+             }
+@@ -522,6 +540,7 @@ private fun LyricsUIStyle.withFontFamily(family: FontFamily?): LyricsUIStyle =
+             rubyTextStyle = rubyTextStyle.copy(fontFamily = family),
+             accompanimentTextStyle = accompanimentTextStyle.copy(fontFamily = family),
+             accompanimentTranslationTextStyle = accompanimentTranslationTextStyle.copy(fontFamily = family),
++            attachedTransliterationTextStyle = attachedTransliterationTextStyle.copy(fontFamily = family),
+         )
+     }
+ 
+@@ -1447,6 +1466,17 @@ private fun WordsLyricLine(
+             displayOptions.transliterationMode,
+             displayOptions.preferredTransliterationLanguage,
+         )
++    // Attach to words: each romanization word sits right above/below its own lyric word.
++    val attachedTransliteration =
++        remember(renderWords, transliterations, lyric.phonetic, style.attachTransliterationToWords) {
++            if (style.attachTransliterationToWords) {
++                attachedRomanizationFor(renderWords, transliterations.firstOrNull(), lyric.phonetic)
++            } else {
++                null
++            }
++        }
++    // The separate romanization line is only used when nothing is attached to the words.
++    val showLineTransliteration = attachedTransliteration == null
+     // Transliteration sits under the words by default, or above them (Top).
+     val transliterationBlock: @Composable () -> Unit = {
+         val onTop = style.transliterationOnTop
+@@ -1519,6 +1549,8 @@ private fun WordsLyricLine(
+             Spacer(modifier = Modifier.height(4.dp))
+         }
+ 
++        if (style.transliterationOnTop && showLineTransliteration) transliterationBlock()
++
+         beforeAccompaniment.forEach { background ->
+             AccompanimentLine(
+                 background = background,
+@@ -1537,8 +1569,6 @@ private fun WordsLyricLine(
+             )
+         }
+ 
+-        if (style.transliterationOnTop) transliterationBlock()
+-
+         if (sentence.isNotBlank()) {
+             ProgressiveWordsText(
+                 text = sentence,
+@@ -1555,10 +1585,31 @@ private fun WordsLyricLine(
+                 rubyTextStyle = style.rubyTextStyle,
+                 showRuby = displayOptions.showRuby,
+                 showEmptyBeat = displayOptions.showEmptyBeat,
++                attachedTexts = attachedTransliteration,
++                attachedStyle = style.attachedTransliterationTextStyle,
++                attachedOnTop = style.transliterationOnTop,
+             )
+         }
+ 
+-        if (!style.transliterationOnTop) transliterationBlock()
++        afterAccompaniment.forEach { background ->
++            AccompanimentLine(
++                background = background,
++                openAtMs = accompanimentOpenAtMs(background, lyric),
++                currentTimeState = currentTimeState,
++                litFraction = litFractionState,
++                placement = AccompanimentPlacement.After,
++                style = style,
++                textMeasurer = textMeasurer,
++                parentAgents = agents,
++                voiceIndexById = voiceIndexById,
++                colorScheme = colorScheme,
++                fallbackAccent = voiceAccent,
++                fallbackAlignEnd = alignEnd,
++                displayOptions = displayOptions,
++            )
++        }
++
++        if (!style.transliterationOnTop && showLineTransliteration) transliterationBlock()
+ 
+         val translations =
+             lyric.translationVariantsFor(
+@@ -1582,25 +1633,76 @@ private fun WordsLyricLine(
+                 displayOptions = displayOptions,
+             )
+         }
++    }
++}
+ 
+-        afterAccompaniment.forEach { background ->
+-            AccompanimentLine(
+-                background = background,
+-                openAtMs = accompanimentOpenAtMs(background, lyric),
+-                currentTimeState = currentTimeState,
+-                litFraction = litFractionState,
+-                placement = AccompanimentPlacement.After,
+-                style = style,
+-                textMeasurer = textMeasurer,
+-                parentAgents = agents,
+-                voiceIndexById = voiceIndexById,
+-                colorScheme = colorScheme,
+-                fallbackAccent = voiceAccent,
+-                fallbackAlignEnd = alignEnd,
+-                displayOptions = displayOptions,
+-            )
++private fun isRomanText(text: String): Boolean = text.all { !it.isLetter() || it.code < 0x250 }
++
++/** The lyric word a romanization word belongs to: the one it overlaps most in time, else the nearest. */
++private fun bestWordIndex(
++    words: List<LyricItem.WordsLyric.WordWithTiming>,
++    target: LyricItem.WordsLyric.WordWithTiming,
++): Int {
++    var best = -1
++    var bestOverlap = 0L
++    words.forEachIndexed { i, w ->
++        if (w.content.isBlank()) return@forEachIndexed
++        val overlap = min(w.endTime, target.endTime) - max(w.startTime, target.startTime)
++        if (overlap > bestOverlap) {
++            bestOverlap = overlap
++            best = i
++        }
++    }
++    if (best >= 0) return best
++    val middle = (target.startTime + target.endTime) / 2
++    return words.indices
++        .filter { words[it].content.isNotBlank() }
++        .minByOrNull { abs((words[it].startTime + words[it].endTime) / 2 - middle) } ?: -1
++}
++
++/**
++ * Romanization per lyric word for "Attach to words". Uses the romanization's own timing when it has some,
++ * otherwise lines the words up one by one. Returns null when there is nothing to attach (roman lyrics or no data),
++ * in which case the romanization is shown as one line instead.
++ */
++private fun attachedRomanizationFor(
++    words: List<LyricItem.WordsLyric.WordWithTiming>,
++    transliteration: LyricItem.WordsLyric.Translation?,
++    linePhonetic: String?,
++): List<String>? {
++    if (words.isEmpty()) return null
++    val shown = words.map { it.content.trim() }
++    if (shown.all { isRomanText(it) }) return null
++    val parts = List(words.size) { mutableListOf<String>() }
++    val timed = transliteration?.words?.filter { it.content.isNotBlank() }.orEmpty()
++    val realIndices = words.indices.filter { shown[it].isNotEmpty() }
++    var mapped = false
++    if (timed.any { it.endTime > it.startTime }) {
++        timed.forEach { tw ->
++            val target = bestWordIndex(words, tw)
++            if (target >= 0) {
++                parts[target] += tw.content.trim()
++                mapped = true
++            }
+         }
+     }
++    if (!mapped) {
++        val tokens =
++            (transliteration?.content?.takeIf { it.isNotBlank() } ?: linePhonetic)
++                .orEmpty()
++                .split(Regex("\\s+"))
++                .filter { it.isNotEmpty() }
++        val pieces = if (timed.size == realIndices.size) timed.map { it.content.trim() } else tokens
++        if (pieces.size == realIndices.size) {
++            realIndices.forEachIndexed { k, i -> parts[i] += pieces[k] }
++        }
++    }
++    val result =
++        parts.mapIndexed { i, list ->
++            val ro = list.joinToString(" ").trim()
++            if (ro.isEmpty() || isRomanText(shown[i]) || ro.equals(shown[i], ignoreCase = true)) "" else ro
++        }
++    return result.takeIf { list -> list.any { it.isNotEmpty() } }
+ }
+ 
+ /** When a background vocal opens: shortly before it starts, or with the line when it starts almost with the main lyric. */
+@@ -1811,6 +1913,8 @@ private fun TranslationLine(
+     textStyle: TextStyle = style.wordsTranslationTextStyle,
+     /** False draws the line as plain static text instead of timing it word by word. */
+     timed: Boolean = true,
++    /** Draws the text inside (round brackets), like a background vocal's translation. */
++    bracketed: Boolean = false,
+ ) {
+     val words =
+         remember(translation, displayOptions.obscureObscene) {
+@@ -1842,7 +1946,7 @@ private fun TranslationLine(
+         )
+     } else {
+         Text(
+-            text = text,
++            text = if (bracketed) "($text)" else text,
+             style = textStyle,
+             color = color,
+             textAlign = textAlign,
+@@ -1872,6 +1976,13 @@ private fun AccompanimentLine(
+     val voiceIndex = backgroundAgents.firstOrNull()?.id?.let(voiceIndexById::get)
+     val textColor = voiceIndex?.let { voiceAccent(it, colorScheme) } ?: fallbackAccent ?: colorScheme.onSurface
+     val secondaryColor = textColor.copy(alpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA)
++    // Not-yet-sung words dim to the Unsung text opacity, exactly like the main lyric.
++    val bgUnsungAlpha =
++        (LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA * LyricUIConstants.INACTIVE_LINE_ALPHA * style.unsungFactor)
++            .coerceIn(0f, LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA)
++    val bgSecondaryUnsungAlpha =
++        (LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA * 0.565f * style.unsungFactor)
++            .coerceIn(0f, LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA)
+     val alignEnd = voiceIndex?.let(::voiceAlignEnd) ?: fallbackAlignEnd
+     val horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
+     val textAlign = if (alignEnd) TextAlign.End else TextAlign.Start
+@@ -1943,7 +2054,7 @@ private fun AccompanimentLine(
+                 textStyle = style.accompanimentTextStyle,
+                 color = textColor,
+                 sungAlpha = LyricUIConstants.ACCOMPANIMENT_SUNG_ALPHA,
+-                unsungAlpha = LyricUIConstants.ACCOMPANIMENT_UNSUNG_ALPHA,
++                unsungAlpha = bgUnsungAlpha,
+                 maskRegistry = maskRegistry,
+                 textMeasurer = textMeasurer,
+                 modifier = Modifier.fillMaxWidth(),
+@@ -1967,7 +2078,7 @@ private fun AccompanimentLine(
+                         style = style,
+                         color = secondaryColor,
+                         sungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA,
+-                        unsungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA,
++                        unsungAlpha = bgSecondaryUnsungAlpha,
+                         textAlign = textAlign,
+                         maskRegistry = maskRegistry,
+                         textMeasurer = textMeasurer,
+@@ -1999,12 +2110,14 @@ private fun AccompanimentLine(
+                     style = style,
+                     color = secondaryColor,
+                     sungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_SUNG_ALPHA,
+-                    unsungAlpha = LyricUIConstants.ACCOMPANIMENT_SECONDARY_UNSUNG_ALPHA,
++                    unsungAlpha = bgSecondaryUnsungAlpha,
+                     textAlign = textAlign,
+                     maskRegistry = maskRegistry,
+                     textMeasurer = textMeasurer,
+                     displayOptions = displayOptions,
+                     textStyle = style.accompanimentTranslationTextStyle,
++                    timed = false,
++                    bracketed = true,
+                 )
+             }
+         }
+@@ -2033,6 +2146,10 @@ private fun ProgressiveWordsText(
+     rubyTextStyle: TextStyle? = null,
+     showRuby: Boolean = false,
+     showEmptyBeat: Boolean = false,
++    /** Romanization per word (null = none attached); an empty string keeps the row height of a word without one. */
++    attachedTexts: List<String>? = null,
++    attachedStyle: TextStyle? = null,
++    attachedOnTop: Boolean = true,
+ ) {
+     if (words.isEmpty()) {
+         Text(
+@@ -2122,6 +2239,9 @@ private fun ProgressiveWordsText(
+                         // 在内间距之后登记坐标，让扫描只覆盖字形。
+                         .onPlaced { maskBlock.wordCoordinates[index] = it },
+             ) {
++                if (attachedTexts != null && attachedStyle != null && attachedOnTop) {
++                    AttachedTransliteration(attachedTexts.getOrNull(index).orEmpty(), attachedStyle, color)
++                }
+                 if (rubyText.isNotBlank()) {
+                     Text(
+                         text = rubyText,
+@@ -2156,11 +2276,30 @@ private fun ProgressiveWordsText(
+                         softWrap = false,
+                     )
+                 }
++                if (attachedTexts != null && attachedStyle != null && !attachedOnTop) {
++                    AttachedTransliteration(attachedTexts.getOrNull(index).orEmpty(), attachedStyle, color)
++                }
+             }
+         }
+     }
+ }
+ 
++/** One romanization word above/below its lyric word (an empty one only reserves the height). */
++@Composable
++private fun AttachedTransliteration(
++    text: String,
++    style: TextStyle,
++    color: Color,
++) {
++    Text(
++        text = text.ifBlank { "\u200B" },
++        style = style,
++        color = color.copy(alpha = 0.92f),
++        maxLines = 1,
++        softWrap = false,
++    )
++}
++
+ /** 渲染用的词，去除首尾空白并保留词间间隔标记。 */
+ private class RenderWord(
+     val text: String,
