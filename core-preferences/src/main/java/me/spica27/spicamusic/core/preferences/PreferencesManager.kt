@@ -63,6 +63,7 @@ class PreferencesManager(
         val LYRIC_JIGGLE_STRENGTH = intPreferencesKey("lyric_jiggle_strength")
         val LYRIC_JIGGLE_DURATION_MS = intPreferencesKey("lyric_jiggle_duration_ms")
         val LYRIC_JIGGLE_DELAY_MS = intPreferencesKey("lyric_jiggle_delay_ms")
+        val LYRIC_ANIMATION = stringPreferencesKey("lyric_animation")
     }
 
 
@@ -91,6 +92,9 @@ class PreferencesManager(
                     jiggleStrength = p[Keys.LYRIC_JIGGLE_STRENGTH] ?: d.jiggleStrength,
                     jiggleDurationMs = p[Keys.LYRIC_JIGGLE_DURATION_MS] ?: d.jiggleDurationMs,
                     jiggleDelayMs = p[Keys.LYRIC_JIGGLE_DELAY_MS] ?: d.jiggleDelayMs,
+                    lyricsAnimation =
+                        p[Keys.LYRIC_ANIMATION]
+                            ?.let(LyricsAnimation::fromString) ?: d.lyricsAnimation,
                 ).sanitized()
             }.distinctUntilChanged()
 
@@ -119,6 +123,9 @@ class PreferencesManager(
                     jiggleStrength = p[Keys.LYRIC_JIGGLE_STRENGTH] ?: d.jiggleStrength,
                     jiggleDurationMs = p[Keys.LYRIC_JIGGLE_DURATION_MS] ?: d.jiggleDurationMs,
                     jiggleDelayMs = p[Keys.LYRIC_JIGGLE_DELAY_MS] ?: d.jiggleDelayMs,
+                    lyricsAnimation =
+                        p[Keys.LYRIC_ANIMATION]
+                            ?.let(LyricsAnimation::fromString) ?: d.lyricsAnimation,
                 )
             val n = transform(current).sanitized()
             p[Keys.LYRIC_FONT_STYLE] = n.fontStyle
@@ -138,6 +145,7 @@ class PreferencesManager(
             p[Keys.LYRIC_JIGGLE_STRENGTH] = n.jiggleStrength
             p[Keys.LYRIC_JIGGLE_DURATION_MS] = n.jiggleDurationMs
             p[Keys.LYRIC_JIGGLE_DELAY_MS] = n.jiggleDelayMs
+            p[Keys.LYRIC_ANIMATION] = n.lyricsAnimation.value
         }
     }
 

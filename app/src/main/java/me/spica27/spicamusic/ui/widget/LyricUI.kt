@@ -121,6 +121,7 @@ import me.spica27.spicamusic.R
 import me.spica27.spicamusic.common.entity.LyricItem
 import me.spica27.spicamusic.common.entity.getSentenceContent
 import me.spica27.spicamusic.common.entity.voiceAgents
+import me.spica27.spicamusic.core.preferences.LyricsAnimation
 import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
 import me.spica27.spicamusic.core.preferences.TransliterationPosition
 import me.spica27.spicamusic.ui.theme.Shapes
@@ -477,6 +478,8 @@ private data class LyricsUIStyle(
     val attachTransliterationToWords: Boolean,
     /** Unsung text opacity relative to its default (50% = 1.0). */
     val unsungFactor: Float,
+    /** Lyrics settings > Animation > Floaty. False keeps the default word animation. */
+    val floatyAnimation: Boolean = false,
 )
 
 @Composable
@@ -567,7 +570,9 @@ private fun rememberLyricsUIStyle(
                 )
             }
             }
-        built.withFontFamily(LyricsFontOption.lyricsFamily(settings.lyricsFont))
+        built
+            .withFontFamily(LyricsFontOption.lyricsFamily(settings.lyricsFont))
+            .copy(floatyAnimation = settings.lyricsAnimation == LyricsAnimation.Floaty)
     }
 }
 
@@ -1833,6 +1838,7 @@ private fun WordsLyricLine(
                 attachedStyle = style.phoneticTextStyle,
                 attachedColor = transliterationColor,
                 attachedOnTop = style.transliterationOnTop,
+                floaty = style.floatyAnimation,
             )
         }
 
@@ -2350,6 +2356,7 @@ private fun AccompanimentLine(
                 rubyTextStyle = style.rubyTextStyle,
                 showRuby = displayOptions.showRuby,
                 showEmptyBeat = displayOptions.showEmptyBeat,
+                floaty = style.floatyAnimation,
             )
 
             if (plainTransliterations.isNotEmpty()) {
@@ -2446,7 +2453,29 @@ private fun ProgressiveWordsText(
     attachedStyle: TextStyle? = null,
     attachedColor: Color = color,
     attachedOnTop: Boolean = true,
+    /** Floaty animation (Lyrics settings > Animation). Lines it cannot handle fall through to the default below. */
+    floaty: Boolean = false,
 ) {
+    if (floaty && words.supportsFloaty(showRuby)) {
+        FloatyWordsText(
+            words = words,
+            currentTimeState = currentTimeState,
+            litFraction = maskRegistry.litFraction,
+            textStyle = textStyle,
+            color = color,
+            sungAlpha = sungAlpha,
+            unsungAlpha = unsungAlpha,
+            textMeasurer = textMeasurer,
+            modifier = modifier,
+            alignEnd = alignEnd,
+            showEmptyBeat = showEmptyBeat,
+            attachedTexts = attachedTexts,
+            attachedStyle = attachedStyle,
+            attachedColor = attachedColor,
+            attachedOnTop = attachedOnTop,
+        )
+        return
+    }
     if (words.isEmpty()) {
         Text(
             text = text,

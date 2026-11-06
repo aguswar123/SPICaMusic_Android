@@ -13,6 +13,19 @@ enum class TransliterationPosition(
     }
 }
 
+/** How the sung words are animated. [Default] is the original sweep, [Floaty] floats whole words letter by letter. */
+enum class LyricsAnimation(
+    val value: String,
+) {
+    Default("default"),
+    Floaty("floaty"),
+    ;
+
+    companion object {
+        fun fromString(value: String?): LyricsAnimation = entries.firstOrNull { it.value == value } ?: Default
+    }
+}
+
 /**
  * Every user-adjustable lyrics option, with the defaults and ranges of the reference lyrics window.
  * All percentages are plain Ints (100 = 100%).
@@ -46,6 +59,8 @@ data class LyricsStyleSettings(
     val jiggleStrength: Int = 50,
     val jiggleDurationMs: Int = 1200,
     val jiggleDelayMs: Int = 45,
+    // ---- Word animation ----
+    val lyricsAnimation: LyricsAnimation = LyricsAnimation.Default,
 ) {
     /** Returns a copy with every value forced into its allowed range. */
     fun sanitized(): LyricsStyleSettings =

@@ -864,6 +864,11 @@
   <string name="lyr_set_move_duration_desc">How long the lyrics take to scroll to the line being sung</string>
   <string name="lyr_set_current_position">Current lyric position</string>
   <string name="lyr_set_current_position_desc">Where the playing line sits on screen</string>
+  <string name="lyr_set_section_animation">Animation</string>
+  <string name="lyr_set_animation">Lyrics animation</string>
+  <string name="lyr_set_animation_desc">How the sung words animate. Floaty keeps whole words together and floats them letter by letter</string>
+  <string name="lyr_set_animation_default">Default</string>
+  <string name="lyr_set_animation_floaty">Floaty</string>
   <string name="lyr_set_section_jiggle">Jiggle</string>
   <string name="lyr_set_jiggle">Jiggle effect</string>
   <string name="lyr_set_jiggle_desc">Lines below the current one spring into place, like Apple Music</string>

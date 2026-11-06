@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.spica27.spicamusic.R
+import me.spica27.spicamusic.core.preferences.LyricsAnimation
 import me.spica27.spicamusic.core.preferences.LyricsStyleSettings
 import me.spica27.spicamusic.core.preferences.TransliterationPosition
 
@@ -42,6 +43,7 @@ fun LyricsSettingsSheet(
                     .navigationBarsPadding()
                     .padding(bottom = 24.dp),
         ) {
+            AnimationSection(settings = settings, onUpdate = onUpdate)
             FontSection(settings = settings, onUpdate = onUpdate)
             TextSizeSection(settings = settings, onUpdate = onUpdate)
             TransliterationSection(settings = settings, onUpdate = onUpdate)
@@ -49,6 +51,27 @@ fun LyricsSettingsSheet(
             JiggleSection(settings = settings, onUpdate = onUpdate)
         }
     }
+}
+
+@Composable
+private fun AnimationSection(
+    settings: LyricsStyleSettings,
+    onUpdate: ((LyricsStyleSettings) -> LyricsStyleSettings) -> Unit,
+) {
+    LyricsSettingsSection(stringResource(R.string.lyr_set_section_animation))
+
+    LyricsSettingsChips(
+        label = stringResource(R.string.lyr_set_animation),
+        description = stringResource(R.string.lyr_set_animation_desc),
+        options = LyricsAnimation.entries,
+        selected = settings.lyricsAnimation,
+        optionLabel = {
+            stringResource(
+                if (it == LyricsAnimation.Floaty) R.string.lyr_set_animation_floaty else R.string.lyr_set_animation_default,
+            )
+        },
+        onSelect = { option -> onUpdate { it.copy(lyricsAnimation = option) } },
+    )
 }
 
 @Composable
