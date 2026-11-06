@@ -1,0 +1,45 @@
+name: Apply floaty lyrics patch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply patch
+        run: |
+          if git apply --reverse --check --whitespace=nowarn floaty-lyrics.patch 2>/dev/null; then
+            echo "Patch is already applied - only cleaning up the patch file."
+          else
+            git apply --check --whitespace=nowarn floaty-lyrics.patch
+            git apply --whitespace=nowarn floaty-lyrics.patch
+          fi
+
+      - name: Remove patch file and commit
+        id: commit
+        run: |
+          git rm -f --quiet floaty-lyrics.patch 2>/dev/null || rm -f floaty-lyrics.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Lyrics: add Floaty animation option"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start APK build
+        if: steps.commit.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-new-apk.yml --ref "${{ github.ref_name }}"
