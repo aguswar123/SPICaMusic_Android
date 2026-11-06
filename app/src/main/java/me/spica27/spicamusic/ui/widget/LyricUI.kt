@@ -2,7 +2,9 @@ package me.spica27.spicamusic.ui.widget
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
@@ -82,6 +84,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
@@ -223,6 +226,12 @@ private object LyricUIConstants {
     const val ACCOMPANIMENT_CLOSED_BLUR_DP = 10f
     const val ACCOMPANIMENT_CLOSED_TRANSLATION_BLUR_DP = 8f
     const val ACCOMPANIMENT_TRANSLATION_BLUR_DELAY_MS = 150
+
+    /** Opened this long after its open time (a seek landed past it): show it open at once instead of animating. */
+    const val ACCOMPANIMENT_SNAP_LATE_MS = 800L
+
+    /** The folding clip reaches this far past the box, so the blur and the glow are not cut off (overflow-clip-margin). */
+    val ACCOMPANIMENT_CLIP_MARGIN = 18.dp
 
     // Instrumental break: three dots that fill up and a countdown (reference window: .ln.gap)
     const val GAP_KEY_PREFIX = "__gap__"
@@ -2102,6 +2111,49 @@ private fun GraphicsLayerScope.blurDp(radiusDp: Float) {
         }
 }
 
+/**
+ * Progress of one background-vocal transition (0 = folded away, 1 = open). It animates when [open] changes during
+ * normal playback and jumps straight to the end state when [shouldSnap] says so (a seek), like `.lyr.snap` in the HTML.
+ */
+@Composable
+private fun rememberAccompanimentProgress(
+    open: Boolean,
+    durationMs: Int,
+    easing: Easing,
+    shouldSnap: () -> Boolean,
+    delayMs: Int = 0,
+): State<Float> {
+    val animatable = remember { Animatable(if (open) 1f else 0f) }
+    val snapCheck by rememberUpdatedState(shouldSnap)
+    LaunchedEffect(open) {
+        val target = if (open) 1f else 0f
+        if (animatable.value == target) return@LaunchedEffect
+        if (snapCheck()) {
+            animatable.snapTo(target)
+        } else {
+            animatable.animateTo(target, tween(durationMs, delayMs, easing))
+        }
+    }
+    return animatable.asState()
+}
+
+/**
+ * `grid-template-rows: 0fr -> 1fr`: the layout height follows [progress] (read in the layout phase only), so the
+ * neighbouring lines move with it. The content is clipped to the folded box plus a small margin.
+ */
+private fun Modifier.accompanimentFold(progress: State<Float>): Modifier =
+    this
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            val height = (placeable.height * progress.value.coerceIn(0f, 1f)).roundToInt()
+            layout(placeable.width, height) { placeable.placeRelative(0, 0) }
+        }.drawWithContent {
+            val margin = LyricUIConstants.ACCOMPANIMENT_CLIP_MARGIN.toPx()
+            clipRect(-margin, -margin, size.width + margin, size.height + margin) {
+                this@drawWithContent.drawContent()
+            }
+        }
+
 @Composable
 private fun AccompanimentLine(
     background: LyricItem.WordsLyric.AccompanimentLyric,
@@ -2138,30 +2190,31 @@ private fun AccompanimentLine(
     val visible by remember(openAtMs, currentTimeState) {
         derivedStateOf { currentTimeState.value >= openAtMs }
     }
-    // Its space is always reserved, so opening never moves the main lyric; it only fades in.
+    // It folds open like the reference window (.bgw): the height grows from 0 to its full size, so the lines below
+    // slide down smoothly instead of leaving an empty gap. It fades in (0.8 s) and comes into focus (1 s) as it opens,
+    // and its translation comes into focus a beat later. After a seek it snaps to its final state without animating.
+    val shouldSnap = { !visible || currentTimeState.value - openAtMs > LyricUIConstants.ACCOMPANIMENT_SNAP_LATE_MS }
+    val foldState =
+        rememberAccompanimentProgress(
+            open = visible,
+            durationMs = LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS,
+            easing = LyricLineScaleEasing,
+            shouldSnap = shouldSnap,
+        )
     val alphaState =
-        animateFloatAsState(
-            targetValue = if (visible) 1f else 0f,
-            animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_FADE_DURATION_MS, easing = LyricLineAlphaEasing),
-            label = "accompanimentAlpha",
+        rememberAccompanimentProgress(
+            open = visible,
+            durationMs = LyricUIConstants.ACCOMPANIMENT_FADE_DURATION_MS,
+            easing = LyricLineAlphaEasing,
+            shouldSnap = shouldSnap,
         )
-    // It comes into focus as it appears; its translation follows a beat later.
-    val blurState =
-        animateFloatAsState(
-            targetValue = if (visible) 0f else LyricUIConstants.ACCOMPANIMENT_CLOSED_BLUR_DP,
-            animationSpec = tween(LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS, easing = LyricLineScaleEasing),
-            label = "accompanimentBlur",
-        )
-    val translationBlurState =
-        animateFloatAsState(
-            targetValue = if (visible) 0f else LyricUIConstants.ACCOMPANIMENT_CLOSED_TRANSLATION_BLUR_DP,
-            animationSpec =
-                tween(
-                    LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS,
-                    delayMillis = LyricUIConstants.ACCOMPANIMENT_TRANSLATION_BLUR_DELAY_MS,
-                    easing = LyricLineScaleEasing,
-                ),
-            label = "accompanimentTranslationBlur",
+    val translationFocusState =
+        rememberAccompanimentProgress(
+            open = visible,
+            durationMs = LyricUIConstants.ACCOMPANIMENT_OPEN_DURATION_MS,
+            delayMs = LyricUIConstants.ACCOMPANIMENT_TRANSLATION_BLUR_DELAY_MS,
+            easing = LyricLineScaleEasing,
+            shouldSnap = shouldSnap,
         )
 
     // 伴唱动画可能覆盖主句和翻译，因此使用独立离屏宿主承载蒙版。
@@ -2172,9 +2225,10 @@ private fun AccompanimentLine(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .accompanimentFold(foldState)
                 .graphicsLayer {
                     clip = false
-                    blurDp(blurState.value)
+                    blurDp((1f - foldState.value) * LyricUIConstants.ACCOMPANIMENT_CLOSED_BLUR_DP)
                 },
     ) {
         Column(
@@ -2277,7 +2331,7 @@ private fun AccompanimentLine(
                             .fillMaxWidth()
                             .graphicsLayer {
                                 clip = false
-                                blurDp(translationBlurState.value)
+                                blurDp((1f - translationFocusState.value) * LyricUIConstants.ACCOMPANIMENT_CLOSED_TRANSLATION_BLUR_DP)
                             },
                 ) {
                     TranslationLine(
