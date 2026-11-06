@@ -28,6 +28,7 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 /**
@@ -88,6 +89,77 @@ internal class JiggleSpec(
 }
 
 /**
+ * Shared by the lyric list and its lines. A background vocal folds open by changing its height every frame, which
+ * moves every line below it. The reference window (HTML) lets plain layout push those lines, so they travel rigidly
+ * with the fold. This host lets the placement modifier tell such a push apart from a normal line change:
+ * a push is followed at once (no glide, no jiggle), a line change keeps its glide and jiggle.
+ * It also collects how much the folds above the sung line grew, so the list can scroll by the same amount and the
+ * sung line stays where it is. Everything runs on the main thread.
+ */
+internal class LyricFoldHost {
+    /** Bumped when the list is re-aimed at a new current line (that move is a glide, not a fold push). */
+    var syncTick: Int = 0
+        private set
+
+    private var lastFoldNanos: Long = Long.MIN_VALUE / 2
+
+    private class Step(
+        val itemIndex: Int,
+        val aboveMain: Boolean,
+        val delta: Int,
+    )
+
+    private val steps = ArrayList<Step>()
+
+    /** Wakes the scroll compensation when a fold has moved. */
+    val wake = Channel<Unit>(Channel.CONFLATED)
+
+    fun markSync() {
+        syncTick++
+    }
+
+    /** True while a fold is moving (or has moved a moment ago), so a position change is a push by the fold. */
+    fun isFoldDriven(): Boolean = System.nanoTime() - lastFoldNanos < FOLD_WINDOW_NANOS
+
+    fun touch() {
+        lastFoldNanos = System.nanoTime()
+    }
+
+    /** One animation step of a fold in line [itemIndex]: its height changed by [delta] pixels. */
+    fun reportFoldStep(
+        itemIndex: Int,
+        aboveMain: Boolean,
+        delta: Int,
+    ) {
+        touch()
+        steps += Step(itemIndex, aboveMain, delta)
+        wake.trySend(Unit)
+    }
+
+    /**
+     * Pixels the list has to scroll so that the sung main lyric stays put: the growth of folds that sit above it
+     * (in earlier lines, or above the main lyric inside its own line) and that are not scrolled out of the list.
+     */
+    fun takeCompensation(
+        playingIndex: Int,
+        firstVisibleIndex: Int,
+    ): Float {
+        var sum = 0f
+        for (step in steps) {
+            val aboveSungLine =
+                step.itemIndex < playingIndex || (step.itemIndex == playingIndex && step.aboveMain)
+            if (aboveSungLine && step.itemIndex >= firstVisibleIndex) sum += step.delta
+        }
+        steps.clear()
+        return sum
+    }
+
+    private companion object {
+        const val FOLD_WINDOW_NANOS = 120_000_000L
+    }
+}
+
+/**
  * 处理前瞻布局后的歌词行位移。
  * 列表先立即更新滚动位置，各行再按时长和错峰延迟补间；手动滚动时直接贴合手指。
  */
@@ -99,6 +171,7 @@ private class LinePlacementModifierNode(
     var delayMillis: Int,
     var jiggle: JiggleSpec?,
     var initialOffsetY: Int,
+    var foldHost: LyricFoldHost?,
 ) : Modifier.Node(),
     ApproachLayoutModifierNode {
     private var offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
@@ -111,6 +184,13 @@ private class LinePlacementModifierNode(
     /** +1 when the list moved forward (lines travel up), -1 when it moved back. */
     private var wobbleDirection = 1f
     private var lastTarget: IntOffset? = null
+
+    /**
+     * Movement that was handed to this line by a folding background vocal. It is added on top of the glide and the
+     * glide aims at `target - rigidShift`, so a fold push never restarts the glide or the jiggle.
+     */
+    private var rigidShift = IntOffset.Zero
+    private var seenSyncTick = foldHost?.syncTick ?: 0
 
     override fun isMeasurementApproachInProgress(lookaheadSize: IntSize): Boolean = false
 
@@ -186,20 +266,42 @@ private class LinePlacementModifierNode(
 
     /** 首次组合的底部歌词先下移，再补间到目标位置。 */
     private fun updatePlacementTarget(target: IntOffset): IntOffset {
-        noteTargetChange(target)
+        val host = foldHost
+        val syncTick = host?.syncTick ?: 0
+        val reaimed = syncTick != seenSyncTick
+        seenSyncTick = syncTick
+        val previous = lastTarget
+        if (previous != null &&
+            previous != target &&
+            host != null &&
+            !reaimed &&
+            !isManualScrolling &&
+            host.isFoldDriven()
+        ) {
+            // A background vocal is folding: this line is pushed rigidly, like plain layout does in the HTML.
+            rigidShift += target - previous
+            lastTarget = target
+        } else {
+            noteTargetChange(target)
+        }
+        val base = target - rigidShift
+        return animateBase(base) + rigidShift
+    }
+
+    private fun animateBase(base: IntOffset): IntOffset {
         if (isFirstFrame) {
             isFirstFrame = false
             if (initialOffsetY != 0 && !isManualScrolling) {
                 offsetAnimation.updateTarget(
-                    target + IntOffset(0, initialOffsetY),
+                    base + IntOffset(0, initialOffsetY),
                     coroutineScope,
                     snap(),
                 )
-                return offsetAnimation.updateTarget(target, coroutineScope, animationSpec())
+                return offsetAnimation.updateTarget(base, coroutineScope, animationSpec())
             }
-            return offsetAnimation.updateTarget(target, coroutineScope, snap())
+            return offsetAnimation.updateTarget(base, coroutineScope, snap())
         }
-        return offsetAnimation.updateTarget(target, coroutineScope, animationSpec())
+        return offsetAnimation.updateTarget(base, coroutineScope, animationSpec())
     }
 
     override fun onReset() {
@@ -214,6 +316,7 @@ private class LinePlacementModifierNode(
         newDelayMillis: Int,
         newJiggle: JiggleSpec?,
         newInitialOffsetY: Int,
+        newFoldHost: LyricFoldHost?,
     ) {
         lookaheadScope = newScope
         isManualScrolling = newIsManualScrolling
@@ -221,6 +324,7 @@ private class LinePlacementModifierNode(
         delayMillis = newDelayMillis
         jiggle = newJiggle
         initialOffsetY = newInitialOffsetY
+        foldHost = newFoldHost
         if (itemKey != newKey) {
             itemKey = newKey
             resetAnimation()
@@ -231,6 +335,8 @@ private class LinePlacementModifierNode(
         offsetAnimation = DeferredTargetAnimation(IntOffset.VectorConverter)
         isFirstFrame = true
         lastTarget = null
+        rigidShift = IntOffset.Zero
+        seenSyncTick = foldHost?.syncTick ?: 0
         wobbleJob?.cancel()
     }
 }
@@ -243,6 +349,7 @@ private data class LinePlacementNodeElement(
     val delayMillis: Int,
     val jiggle: JiggleSpec?,
     val initialOffsetY: Int,
+    val foldHost: LyricFoldHost?,
 ) : ModifierNodeElement<LinePlacementModifierNode>() {
     override fun update(node: LinePlacementModifierNode) {
         node.updateState(
@@ -253,6 +360,7 @@ private data class LinePlacementNodeElement(
             delayMillis,
             jiggle,
             initialOffsetY,
+            foldHost,
         )
     }
 
@@ -265,6 +373,7 @@ private data class LinePlacementNodeElement(
             delayMillis,
             jiggle,
             initialOffsetY,
+            foldHost,
         )
 }
 
@@ -277,6 +386,7 @@ internal fun Modifier.linePlacement(
     delayMillis: Int,
     jiggle: JiggleSpec? = null,
     initialOffsetY: Int = 0,
+    foldHost: LyricFoldHost? = null,
 ): Modifier =
     then(
         LinePlacementNodeElement(
@@ -287,5 +397,6 @@ internal fun Modifier.linePlacement(
             delayMillis = delayMillis,
             jiggle = jiggle,
             initialOffsetY = initialOffsetY,
+            foldHost = foldHost,
         ),
     )

@@ -53,10 +53,12 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -624,6 +626,8 @@ fun LyricsUI(
 
     val style = rememberLyricsUIStyle(displayMode, styleSettings)
     val lazyListState = rememberLazyListState()
+    // Tells the lines apart: a background vocal folding open pushes them rigidly, a new current line glides them.
+    val foldHost = remember(lyricLines) { LyricFoldHost() }
     var isAutoScrolling by remember { mutableStateOf(false) }
     val isManualScrolling by remember {
         derivedStateOf { lazyListState.isScrollInProgress && !isAutoScrolling }
@@ -719,6 +723,7 @@ fun LyricsUI(
                     return@LaunchedEffect
                 }
                 isAutoScrolling = true
+                foldHost.markSync()
                 try {
                     if (hasSyncedInitialPosition) {
                         lazyListState.syncToLyricIndex(
@@ -735,6 +740,26 @@ fun LyricsUI(
                     hasSyncedInitialPosition = true
                 } finally {
                     isAutoScrolling = false
+                }
+            }
+
+            // A background vocal above the sung main lyric grows the layout and would push the main lyric down.
+            // Scroll by the same amount, one frame behind, so the main lyric stays where it is (the lines below it
+            // are pushed by the fold, as in the HTML).
+            LaunchedEffect(foldHost, lazyListState) {
+                for (ignored in foldHost.wake) {
+                    val sungIndex = playingIndex
+                    val compensation =
+                        foldHost.takeCompensation(sungIndex, lazyListState.firstVisibleItemIndex)
+                    if (compensation != 0f &&
+                        sungIndex in lyricLines.indices &&
+                        hasSyncedInitialPosition &&
+                        !showSeekOverlay &&
+                        !isManualScrolling
+                    ) {
+                        lazyListState.dispatchRawDelta(compensation)
+                        foldHost.touch()
+                    }
                 }
             }
 
@@ -815,6 +840,7 @@ fun LyricsUI(
                             durationMillis = lineMoveDurationMillis,
                             delayMillis = staggerDelayMillis,
                             jiggle = if (jiggleLine) jiggleSpec else null,
+                            foldHost = foldHost,
                             initialOffsetY =
                                 if (index > playingIndex) bottomFlyInOffsetPx else 0,
                         )
@@ -824,55 +850,58 @@ fun LyricsUI(
                     val lineAccent =
                         if (voiceIds.size > 1) voiceAccent(lineVoiceIndex, colorScheme) else null
                     val alignEnd = lineVoiceIndex?.let(::voiceAlignEnd) == true
-                    when (line) {
-                        is LyricItem.NormalLyric ->
-                            LyricLine(
-                                lyric = line,
-                                isActive = isActive,
-                                alphaProvider = { alphaState.value },
-                                scaleProvider = { scaleState.value },
-                                blurRadius = blurRadius.dp,
-                                style = style,
-                                voiceAccent = lineAccent,
-                                alignEnd = alignEnd,
-                                agents = lineAgents,
-                                showSongPart = showSongPart,
-                                songPart = songPart,
-                                displayOptions = displayOptions,
-                                modifier = placementModifier,
-                            )
+                    val foldItem = remember(foldHost, index) { LyricFoldItem(foldHost, index) }
+                    CompositionLocalProvider(LocalLyricFoldItem provides foldItem) {
+                        when (line) {
+                            is LyricItem.NormalLyric ->
+                                LyricLine(
+                                    lyric = line,
+                                    isActive = isActive,
+                                    alphaProvider = { alphaState.value },
+                                    scaleProvider = { scaleState.value },
+                                    blurRadius = blurRadius.dp,
+                                    style = style,
+                                    voiceAccent = lineAccent,
+                                    alignEnd = alignEnd,
+                                    agents = lineAgents,
+                                    showSongPart = showSongPart,
+                                    songPart = songPart,
+                                    displayOptions = displayOptions,
+                                    modifier = placementModifier,
+                                )
 
-                        is LyricItem.WordsLyric ->
-                            if (line.isGapLine()) {
-                                GapLine(
-                                    gap = line,
+                            is LyricItem.WordsLyric ->
+                                if (line.isGapLine()) {
+                                    GapLine(
+                                        gap = line,
+                                        currentTimeState = currentTimeState,
+                                        isActive = isActive,
+                                        alphaProvider = { alphaState.value },
+                                        scaleProvider = { scaleState.value },
+                                        blurRadius = blurRadius.dp,
+                                        style = style,
+                                        modifier = placementModifier,
+                                    )
+                                } else WordsLyricLine(
+                                    lyric = line,
                                     currentTimeState = currentTimeState,
                                     isActive = isActive,
                                     alphaProvider = { alphaState.value },
                                     scaleProvider = { scaleState.value },
                                     blurRadius = blurRadius.dp,
                                     style = style,
+                                    textMeasurer = textMeasurer,
+                                    agents = lineAgents,
+                                    voiceAccent = lineAccent,
+                                    alignEnd = alignEnd,
+                                    voiceIndexById = voiceIndexById,
+                                    colorScheme = colorScheme,
+                                    showSongPart = showSongPart,
+                                    songPart = songPart,
+                                    displayOptions = displayOptions,
                                     modifier = placementModifier,
                                 )
-                            } else WordsLyricLine(
-                                lyric = line,
-                                currentTimeState = currentTimeState,
-                                isActive = isActive,
-                                alphaProvider = { alphaState.value },
-                                scaleProvider = { scaleState.value },
-                                blurRadius = blurRadius.dp,
-                                style = style,
-                                textMeasurer = textMeasurer,
-                                agents = lineAgents,
-                                voiceAccent = lineAccent,
-                                alignEnd = alignEnd,
-                                voiceIndexById = voiceIndexById,
-                                colorScheme = colorScheme,
-                                showSongPart = showSongPart,
-                                songPart = songPart,
-                                displayOptions = displayOptions,
-                                modifier = placementModifier,
-                            )
+                        }
                     }
                 }
                 item {
@@ -1778,6 +1807,7 @@ private fun WordsLyricLine(
                 fallbackAccent = voiceAccent,
                 fallbackAlignEnd = alignEnd,
                 displayOptions = displayOptions,
+                aboveMain = true,
             )
         }
 
@@ -1821,6 +1851,7 @@ private fun WordsLyricLine(
                 fallbackAccent = voiceAccent,
                 fallbackAlignEnd = alignEnd,
                 displayOptions = displayOptions,
+                aboveMain = false,
             )
         }
 
@@ -2141,11 +2172,22 @@ private fun rememberAccompanimentProgress(
  * `grid-template-rows: 0fr -> 1fr`: the layout height follows [progress] (read in the layout phase only), so the
  * neighbouring lines move with it. The content is clipped to the folded box plus a small margin.
  */
-private fun Modifier.accompanimentFold(progress: State<Float>): Modifier =
+private fun Modifier.accompanimentFold(
+    progress: State<Float>,
+    tracker: FoldStepTracker,
+    onStep: (Int) -> Unit,
+): Modifier =
     this
         .layout { measurable, constraints ->
             val placeable = measurable.measure(constraints)
             val height = (placeable.height * progress.value.coerceIn(0f, 1f)).roundToInt()
+            val previous = tracker.lastHeight
+            tracker.lastHeight = height
+            // Report the animation steps only. A jump of more than half the box is a seek (snap), and the list
+            // already re-aims itself after a seek.
+            if (previous >= 0 && previous != height && abs(height - previous) * 2 <= placeable.height) {
+                onStep(height - previous)
+            }
             layout(placeable.width, height) { placeable.placeRelative(0, 0) }
         }.drawWithContent {
             val margin = LyricUIConstants.ACCOMPANIMENT_CLIP_MARGIN.toPx()
@@ -2153,6 +2195,25 @@ private fun Modifier.accompanimentFold(progress: State<Float>): Modifier =
                 this@drawWithContent.drawContent()
             }
         }
+
+/** Last laid-out height of one fold, to turn the animated height into per-frame steps. */
+private class FoldStepTracker {
+    var lastHeight: Int = -1
+}
+
+/** The lyric line a composable sits in, and the host that coordinates the folding background vocals. */
+@Immutable
+internal class LyricFoldItem(
+    val host: LyricFoldHost,
+    val index: Int,
+) {
+    fun reportStep(
+        delta: Int,
+        aboveMain: Boolean,
+    ) = host.reportFoldStep(index, aboveMain, delta)
+}
+
+internal val LocalLyricFoldItem = compositionLocalOf<LyricFoldItem?> { null }
 
 @Composable
 private fun AccompanimentLine(
@@ -2168,6 +2229,7 @@ private fun AccompanimentLine(
     fallbackAccent: Color?,
     fallbackAlignEnd: Boolean,
     displayOptions: LyricsDisplayOptions,
+    aboveMain: Boolean,
 ) {
     val backgroundAgents = background.voiceAgents().ifEmpty { parentAgents }
     // A background vocal always uses the colour and the side of its main lyric, so it never looks like another voice.
@@ -2194,6 +2256,8 @@ private fun AccompanimentLine(
     // slide down smoothly instead of leaving an empty gap. It fades in (0.8 s) and comes into focus (1 s) as it opens,
     // and its translation comes into focus a beat later. After a seek it snaps to its final state without animating.
     val shouldSnap = { !visible || currentTimeState.value - openAtMs > LyricUIConstants.ACCOMPANIMENT_SNAP_LATE_MS }
+    val foldItem = LocalLyricFoldItem.current
+    val foldTracker = remember { FoldStepTracker() }
     val foldState =
         rememberAccompanimentProgress(
             open = visible,
@@ -2225,7 +2289,7 @@ private fun AccompanimentLine(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .accompanimentFold(foldState)
+                .accompanimentFold(foldState, foldTracker) { delta -> foldItem?.reportStep(delta, aboveMain) }
                 .graphicsLayer {
                     clip = false
                     blurDp((1f - foldState.value) * LyricUIConstants.ACCOMPANIMENT_CLOSED_BLUR_DP)
